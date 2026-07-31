@@ -535,8 +535,15 @@ describe('the gate against a real estate', { skip }, () => {
   })
 
   it('promotes under a recorded override', async () => {
+    // One clock for everything. The evaluation must use the REAL current time, because the
+    // override's expiresAt is stamped by the database's now() — evaluated at the fixture NOW the
+    // override would not exist yet. But the failing run's timestamp must then be relative to that
+    // same real clock: recorded against the fixture NOW it goes stale (journey_stale, an unknown
+    // no override can reach) as soon as the wall clock is more than freshnessMs past NOW, and
+    // this test starts failing at 11:00 UTC on the day the fixture names.
+    const now = new Date()
     await cleanEstate()
-    await recordRun(db(sql), run(CRITICAL.name, 'fail', new Date(NOW.getTime() - 10_000)))
+    await recordRun(db(sql), run(CRITICAL.name, 'fail', new Date(now.getTime() - 10_000)))
     await addOverride(db(sql), {
       releaseTag: RELEASE,
       reasonCode: 'journey_failing',
@@ -545,7 +552,7 @@ describe('the gate against a real estate', { skip }, () => {
       requestedBy: 'user:1',
       ttlMs: 3_600_000,
     })
-    const decision = await evaluate(db(sql), RELEASE, { ...OPTIONS, now: new Date() })
+    const decision = await evaluate(db(sql), RELEASE, { ...OPTIONS, now })
     assert.equal(decision.decision, 'promote_with_override')
   })
 })
