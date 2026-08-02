@@ -1,23 +1,28 @@
-# Continuous integration.
-#
-# ────────────────────────────────────────────────────────────────────────────────────────────────
-# THIS FILE IS TEMPORARY. Once `cloudsforge/.github` exists (AD-03), everything below except the
-# repository-specific rules is deleted and replaced by a call to the shared reusable workflow:
-#
-#   jobs:
-#     ci:
-#       uses: cloudsforge/.github/.github/workflows/service-ci.yml@v1
-#       with:
-#         service: beacon
-#         database-env-var: BEACON_DATABASE_URL
-#         port: 4011
-#       secrets: inherit
-#
-# The measured target in docs/ecosystem/03 §5 is **zero repositories with a bespoke CI file**, so
-# treat every line here as a liability with a deletion date rather than as something to extend.
-# ────────────────────────────────────────────────────────────────────────────────────────────────
-
 name: CI
+
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+# The estate-wide half of this file is a CALL, not a copy. The file it replaces was 266 lines and
+# its own header said it was temporary, to be "deleted and replaced by a call to the shared
+# reusable workflow" — that workflow exists, so this is that deletion.
+#
+# WHAT THE COPY COST WHILE IT SURVIVED. service-ci.yml runs a step no bespoke file had: it derives
+# every scope this service's route gates demand and fails if one is absent from the registry in
+# @cloudsforge/contracts-auth. identity refuses to mint a token naming an unknown scope, so an
+# unregistered scope is a service-to-service surface no identity-issued token can ever reach — and
+# the suite stays green regardless, because it mints its own principals. This repository gates on
+# beacon:read, beacon:write and beacon:gate; nothing checked any of the three until now.
+#
+# The shared workflow also gives this repository things the bespoke file never had: a Postgres
+# container whose DSN is exported under the exact name testsupport.ts reads, a build that FAILS if
+# the database suite skipped rather than going green having proved nothing, and an image job that
+# migrates and BOOTS the container and reads /livez. The old `docker` job stopped at `push: false`
+# — it built the image and never once ran it.
+#
+# The `controls` job below is what the shared workflow does not cover: rule 7, this repository's
+# stricter reading of rule 8, and the controls this service exists to add. Each is asserted as
+# TEXT — the tests prove they work, these prove they are still there, so deleting one is a red
+# build rather than a quiet regression in a refactor.
+# ────────────────────────────────────────────────────────────────────────────────────────────────
 
 on:
   push:
@@ -32,129 +37,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        # Not a secret: this database exists for the duration of one job, is reachable only from
-        # it, and holds nothing. A real value here would be a real value in a public log.
-        env:
-          POSTGRES_USER: beacon
-          POSTGRES_PASSWORD: beacon
-          POSTGRES_DB: beacon_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U beacon"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      # Temporary: the two checkouts and the sibling layout exist only because the runtime packages
-      # are unpublished. On publish this collapses to one checkout with no `path:`.
-      - uses: actions/checkout@v4
-        with: { path: beacon }
-      - uses: actions/checkout@v4
-        with: { repository: cloudsforge-online/micro-runtime, path: runtime, token: "${{ secrets.ESTATE_READ_TOKEN }}" }
+  estate:
+    uses: cloudsforge-online/micro-org/.github/workflows/service-ci.yml@main
+    with:
+      service: beacon
+      database-env-var: BEACON_DATABASE_URL
+      # 4011, read off src/env.ts's own default rather than chosen here. The shared workflow checks
+      # that .env.example agrees with that default, so all three stay in step.
+      port: 4011
+      # Match production rather than the workflow's default of 16: the estate's compose files pin
+      # postgres:17-alpine, and a suite that passes on a version nobody runs proves nothing.
+      postgres-version: '17'
+      # The image smoke test boots the real service, and src/env.ts validates its configuration at
+      # import — so the container needs the variables it declares, not just a database, or it exits
+      # before it can serve /livez. CI-only NON-secrets: BEACON_TOKEN only has to clear the
+      # 24-character length check, and the identity URLs are never dialled because /livez needs no
+      # upstream. Never a real credential.
+      smoke-env: |
+        IDENTITY_JWKS_URL=http://127.0.0.1:4001/.well-known/jwks.json
+        IDENTITY_ISSUER=http://127.0.0.1:4001
+        BEACON_TOKEN=ci-only-not-a-real-token-0000000000000
+    secrets:
+      # @cloudsforge/* resolves through link:../runtime rather than a registry, so the workflow
+      # checks out micro-runtime as a sibling. It is private, so it needs a contents:read token.
+      estate_token: ${{ secrets.ESTATE_READ_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
 
-      - uses: pnpm/action-setup@v4
-        with: { version: 11.9.0 }
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: beacon/pnpm-lock.yaml
-
-      # `link:` resolves to the sibling's own node_modules, so the sibling must be installed before
-      # this repository is. That is the price of `link:`, and it is worth paying: `file:` packs the
-      # dependency and each of those packages declares files: ["dist"], so a packed install
-      # resolves its exports to a dist/ that was never built.
-      - name: Install the runtime packages
-        run: pnpm --dir runtime install --frozen-lockfile
-
-      - name: Install
-        working-directory: beacon
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck
-        working-directory: beacon
-        # Not a formality here. The public projection's allowlist is asserted against its interface
-        # by an `Exact<>` type, so a field added to `PublicIncident` without being added to
-        # `PUBLIC_INCIDENT_FIELDS` — or the reverse — fails THIS step and nothing else.
-        run: pnpm typecheck
-
-      - name: Migrate the test database
-        working-directory: beacon
-        # The migrator is exercised as a migrator, on an empty database, exactly as a deploy runs
-        # it. A schema created by the test suite instead would never prove the one-shot job works —
-        # and this service's two most important controls, `incidents_open_uniq` and
-        # `gate_decisions_indeterminate_never_promotes`, only exist because that job ran.
-        env:
-          BEACON_DATABASE_URL: postgres://beacon:beacon@127.0.0.1:5432/beacon_test
-          IDENTITY_JWKS_URL: http://127.0.0.1:4001/.well-known/jwks.json
-          IDENTITY_ISSUER: http://127.0.0.1:4001
-          BEACON_TOKEN: ci-only-not-a-real-token-0000000000000
-        run: pnpm migrate
-
-      - name: Test
-        working-directory: beacon
-        env:
-          BEACON_TEST_DATABASE_URL: postgres://beacon:beacon@127.0.0.1:5432/beacon_test
-        run: pnpm test
-
-  # The estate-wide rules from docs/ecosystem/03 §2, as checks rather than as review discipline.
-  rules:
+  controls:
+    name: The controls this service exists to add
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 'Rule 1 — one database, and it is this service''s own'
-        run: |
-          if grep -rnE '[A-Z_]*DATABASE_URL' src/ --include='*.ts' \
-             | grep -vE 'BEACON_DATABASE_URL|BEACON_TEST_DATABASE_URL'; then
-            echo '::error::a connection string other than BEACON_DATABASE_URL is referenced'
-            exit 1
-          fi
-          if grep -rnE '(postgres|postgresql)://' src/ --include='*.ts' | grep -v '\.test\.ts'; then
-            echo '::error::a literal connection string appears outside a test'
-            exit 1
-          fi
-
-      - name: 'Rule 4 — livez, readyz and metrics exist'
-        run: |
-          for endpoint in /livez /readyz /metrics; do
-            grep -q "'$endpoint'" src/server.ts \
-              || { echo "::error::$endpoint is not served"; exit 1; }
-          done
 
       - name: 'Rule 7 — migrations are never run by the service process'
+        # A service that migrates on boot turns a rolling deploy into N migrators racing each other
+        # and a failed migration into a crash-loop rather than a job that stopped.
         run: |
           if grep -nE '\bmigrate\(' src/index.ts; then
             echo '::error::index.ts calls migrate — that is the migrator job, not the service'
             exit 1
           fi
+          echo 'ok: the service process does not migrate'
 
       # ────────────────────────────────────────────────────────────────────────────────────────
-      # Rule 8 — every background timer is a leased job.
+      # Rule 8, read more strictly here than the shared workflow reads it.
       #
-      # This repository REPLACES a service whose entire schedule is `setInterval`, so the check
-      # matters more here than anywhere: `infra/beacon/src/probe.js:98`, `schedule.js:77` and
-      # `store.js:221` are three module-scope timers, and each one means two replicas do the work
-      # twice.
+      # service-ci.yml bans setInterval, which this repository also has none of. What it does not
+      # ban is setTimeout, and this repository REPLACES a service whose entire schedule was timers
+      # — infra/beacon/src/probe.js:98, schedule.js:77 and store.js:221 are three module-scope
+      # timers, and each one means two replicas do the work twice.
       #
-      # Deadline timers are exempt and named explicitly. `probes.ts` and `journeys.ts` race a
-      # `setTimeout` against the work, and that timer is the ONLY thing that stops a hung upstream
+      # Deadline timers are exempt and named explicitly. probes.ts and journeys.ts race a
+      # setTimeout against the work, and that timer is the ONLY thing stopping a hung upstream from
       # holding a job lease for ever. It is a deadline, not a schedule; the difference is that
       # nothing recurs.
       # ────────────────────────────────────────────────────────────────────────────────────────
-      - name: 'Rule 8 — every background timer is a leased job'
+      - name: 'Rule 8 — no setTimeout outside the two deadline races'
         run: |
-          if grep -rnE '\bsetInterval\(' src/ --include='*.ts' \
-             | grep -v '\.test\.ts' \
-             | grep -vE '^[^:]+:[0-9]+: *(//|\*)'; then
-            echo '::error::a setInterval was found; background work is a leased job (@cloudsforge/jobs)'
-            exit 1
-          fi
           if grep -rnE '\bsetTimeout\(' src/ --include='*.ts' \
              | grep -v '\.test\.ts' \
              | grep -vE '^src/(probes|journeys)\.ts:' \
@@ -162,12 +103,12 @@ jobs:
             echo '::error::a setTimeout outside the deadline races in probes.ts/journeys.ts'
             exit 1
           fi
+          echo 'ok: no setTimeout outside the deadline races'
 
       # ────────────────────────────────────────────────────────────────────────────────────────
       # THE FOUR CONTROLS THIS SERVICE EXISTS TO ADD, ASSERTED AS TEXT.
       #
-      # The tests prove they WORK; these prove they are still THERE, so that deleting one is a red
-      # build rather than a quiet regression in a refactor.
+      # The tests prove they WORK; these prove they are still THERE.
       # ────────────────────────────────────────────────────────────────────────────────────────
 
       - name: 'AD-04 — the gate refuses on an unknown, and the database agrees'
@@ -246,21 +187,4 @@ jobs:
             echo '::error::a .env file is tracked'
             exit 1
           fi
-
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      # Temporary, and for the same reason as above.
-      - uses: actions/checkout@v4
-        with: { path: beacon }
-      - uses: actions/checkout@v4
-        with: { repository: cloudsforge-online/micro-runtime, path: runtime, token: "${{ secrets.ESTATE_READ_TOKEN }}" }
-
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the image
-        uses: docker/build-push-action@v6
-        with:
-          context: beacon
-          build-contexts: |
-            runtimepkgs=runtime
-          push: false
+          echo 'ok: no credential is committed'
