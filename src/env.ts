@@ -202,6 +202,58 @@ export interface Env {
   /** Serve the redacted projection without a token. "Public" is a decision, so it defaults off. */
   readonly publicStatus: boolean
 
+  /* ---------------------------------------------------------------- journeys that need more */
+
+  /**
+   * The origin an SSO hand-off code is minted against, for `identity.handoff`.
+   *
+   * A hand-off code is bound to one origin at mint and matched at redemption — that binding is the
+   * whole security of the hand-off, because without it an open redirect anywhere in the estate
+   * turns a legitimate sign-in into a token delivered to somebody else's page. So the journey
+   * cannot invent one: it has to be an origin identity's own `IDENTITY_HANDOFF_ORIGINS` names.
+   *
+   * Empty is supported and means the journey SKIPS with that reason. It is not a failure: an
+   * estate that has not configured SSO has not demonstrated a broken SSO. The dev estate has not —
+   * `IDENTITY_HANDOFF_ORIGINS` is unset in `deploy/compose/docker-compose.estate.yml`.
+   */
+  readonly handoffOrigin: string
+
+  /**
+   * A long-lived service credential, exchanged for a short-lived scoped token per journey run.
+   *
+   * **A credential, never an injected token, and that is the point.** `deploy/README.md` records
+   * the ten-minute cliff: identity issues service tokens with a 600-second TTL and nothing re-mints
+   * one, so anything holding an injected token starts answering 401 ten minutes after the estate
+   * came up. `POST /service-tokens/exchange` turns a credential into a fresh token whenever one is
+   * needed, which is the shape a monitor running every five minutes for weeks requires.
+   *
+   * Empty is supported and means the journeys that need a scoped token are **not declared at all**
+   * — absent rather than declared-and-skipping. Beacon cannot hold one today in any case:
+   * `IDENTITY_SERVICE_TOKEN_GRANTS` names thirteen services and `beacon` is not among them.
+   */
+  readonly serviceCredential: string
+
+  /* ---------------------------------------------------------------- the browser */
+
+  /**
+   * Drive a real browser at all.
+   *
+   * Off by default. A browser is a large optional dependency and a deployment that chooses not to
+   * ship one is making a decision, not suffering an outage — so every browser journey skips with
+   * that reason rather than failing.
+   */
+  readonly browserEnabled: boolean
+  /**
+   * Absolute path to a Chromium.
+   *
+   * Empty lets `playwright-core` find its own, which is what a developer machine with a
+   * `ms-playwright` cache wants. A container sets it, because the image installs Chromium through
+   * the package manager rather than through playwright.
+   */
+  readonly browserExecutable: string
+  /** How long one page operation may take. Separate from the journey deadline, which covers all of them. */
+  readonly browserTimeoutMs: number
+
   readonly checkRetentionDays: number
   readonly rollupRetentionDays: number
   readonly runRetentionDays: number
@@ -230,6 +282,25 @@ export function loadEnv(source: Source = process.env, host = ''): Env {
     throw new EnvError(
       `BEACON_PROBE_DEADLINE_MS (${probeDeadlineMs}) must be below BEACON_PROBE_INTERVAL_MS (${probeIntervalMs})`,
     )
+  }
+
+  // Validated rather than passed through. An origin with a path, or a bare hostname, produces a
+  // hand-off code identity will never match at redemption, and the journey would report SSO broken
+  // for a configuration typo.
+  const handoffOrigin = optional(source, 'BEACON_HANDOFF_ORIGIN', '')
+  if (handoffOrigin.length > 0) {
+    let parsed: URL
+    try {
+      parsed = new URL(handoffOrigin)
+    } catch {
+      throw new EnvError(`BEACON_HANDOFF_ORIGIN must be an absolute origin (got "${handoffOrigin}")`)
+    }
+    if (parsed.origin !== handoffOrigin) {
+      throw new EnvError(
+        `BEACON_HANDOFF_ORIGIN must be exactly an origin — scheme, host and optional port, no ` +
+          `path or trailing slash (got "${handoffOrigin}", meant "${parsed.origin}")`,
+      )
+    }
   }
 
   return {
@@ -266,6 +337,16 @@ export function loadEnv(source: Source = process.env, host = ''): Env {
     sloWindowDays: integer(source, 'BEACON_SLO_WINDOW_DAYS', 28, 1, 400),
 
     publicStatus: boolean(source, 'BEACON_PUBLIC_STATUS', false),
+
+    handoffOrigin,
+    // Never logged, never echoed, and deliberately NOT run through `requiredSecret`: it is
+    // optional, and a length floor on an optional value would reject the empty string that means
+    // "this deployment has no credential".
+    serviceCredential: optional(source, 'BEACON_SERVICE_CREDENTIAL', ''),
+
+    browserEnabled: boolean(source, 'BEACON_BROWSER_ENABLED', false),
+    browserExecutable: optional(source, 'BEACON_BROWSER_EXECUTABLE', ''),
+    browserTimeoutMs: integer(source, 'BEACON_BROWSER_TIMEOUT_MS', 30_000, 1_000, 300_000),
 
     // Raw checks are the bulk of the data and are worthless once rolled up. Rollups are small and
     // are what a 90-day uptime figure is computed from, so they outlive the raw rows.

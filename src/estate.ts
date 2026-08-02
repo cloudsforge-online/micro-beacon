@@ -21,6 +21,29 @@
  * than an absence somebody has to notice. Adding one is this file plus one row.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **TWO OF THE JOURNEYS BELOW COULD ONLY EVER FAIL, AND BOTH ARE FIXED IN PLACE.**
+ *
+ * Found on 2026-08-03 by running them against the dev estate, which nothing in this repository had
+ * ever done — the six journeys had no tests at all.
+ *
+ *   * `identity.signin` posted `{ email, password }` to `POST /auth/login`.
+ *     `@cloudsforge/contracts-auth`'s `validateLogin` reads `identifier` and has never read
+ *     `email`, so identity answered 400 on every run.
+ *   * `identity.handoff` posted `{}` to `POST /auth/handoff`, which requires `redirectOrigin`, and
+ *     redeemed without the `Origin` header the redemption route requires. 400 on every run.
+ *
+ * Both are CRITICAL, so the gate refused every release — for the monitor's own defect, dressed up
+ * as the product being broken. That is the worst failure a release gate has: the fix everybody
+ * reaches for is to switch the gate off. `estate.test.ts` now drives all six against a fake estate
+ * that answers exactly what the real services answer, and each assertion is proved to go red when
+ * the estate stops holding it.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ *
+ * **The cross-service journeys are in `ecosystem.ts`, and the browser catalogue is in
+ * `browser/`.** The split is by what a journey needs to be wrong: everything here is one service
+ * answering for itself, everything there needs at least two processes or a rendered page.
+ *
  * Every route below was read out of the service that serves it, not out of a document. Two of the
  * estate's own architecture documents were found stale while this repository was being written, so
  * a route taken from prose is a route that has not been checked.
@@ -54,92 +77,19 @@
  * line number was standing in for, done in a way that cannot rot.
  */
 
-import { randomUUID } from 'node:crypto'
+import { accessToken, call, stringField, throwaway } from './calls.ts'
+import { GROUPS } from './groups.ts'
+import { ecosystemJourneys } from './ecosystem.ts'
 import type { JourneyContext, JourneyDefinition } from './journeys.ts'
 
-/** Product groups, as the public page names them. Never a service name. */
-export const GROUPS = {
-  account: 'Account',
-  wallet: 'Wallet',
-  market: 'Market',
-  worlds: 'Worlds',
-  network: 'Network',
-} as const
-
-interface Json {
-  readonly [key: string]: unknown
-}
-
 /**
- * A JSON call inside a journey step.
+ * Product groups now live in `groups.ts` and are re-exported here.
  *
- * Every request carries its own deadline. The journey has one too, but a journey deadline that
- * fires tells you only that the whole scenario was slow; a per-call one tells you which call was.
+ * Three files need them and this one imports two of those three to assemble the registry, so
+ * keeping the constant here would make the import graph a cycle for the sake of five strings.
+ * The re-export keeps `GROUPS` importable from where it has always been importable from.
  */
-async function call(
-  ctx: JourneyContext,
-  url: string,
-  init: { method?: string; body?: unknown; token?: string; deadlineMs?: number } = {},
-): Promise<{ status: number; body: Json }> {
-  const headers: Record<string, string> = { accept: 'application/json' }
-  if (init.body !== undefined) headers['content-type'] = 'application/json'
-  if (init.token) headers['authorization'] = `Bearer ${init.token}`
-
-  const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(init.deadlineMs ?? 10_000)])
-  const response = await fetch(url, {
-    method: init.method ?? 'GET',
-    headers,
-    ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-    signal,
-    redirect: 'manual',
-  })
-  const text = await response.text()
-  let body: Json = {}
-  if (text.length > 0) {
-    try {
-      const parsed: unknown = JSON.parse(text)
-      if (typeof parsed === 'object' && parsed !== null) body = parsed as Json
-    } catch {
-      // A non-JSON body from a JSON route is a finding, not a crash. The status is still the
-      // thing the assertion is about, and the empty body makes the assertion fail with a message
-      // about what was expected rather than with a SyntaxError from the harness.
-      body = {}
-    }
-  }
-  return { status: response.status, body }
-}
-
-function stringField(body: Json, ...path: string[]): string | null {
-  let cursor: unknown = body
-  for (const key of path) {
-    if (typeof cursor !== 'object' || cursor === null) return null
-    cursor = (cursor as Record<string, unknown>)[key]
-  }
-  return typeof cursor === 'string' ? cursor : null
-}
-
-/**
- * A throwaway account, per run.
- *
- * **Never a real user and never one shared between journeys.** Two journeys sharing an account
- * would move each other's balance and each other's session, and the flake that produces is
- * indistinguishable from the outage it would be reported as. The address is namespaced so the rows
- * can be found and pruned — identity has no account-deletion route, which is a fact about the
- * estate rather than about this harness, and it is said here because a monitor that quietly
- * accumulates rows in a production table gets switched off by whoever finds out the hard way.
- *
- *     delete from users where email like 'beacon+%';
- */
-function throwaway(): { email: string; handle: string; password: string } {
-  const id = randomUUID().replace(/-/g, '').slice(0, 16)
-  return {
-    email: `beacon+${id}@beacon.test`,
-    handle: `bx_${id.slice(0, 14)}`,
-    // Generated per run and written nowhere. It is a credential for an account that owns nothing,
-    // and it still never reaches a log: the telemetry redactor drops `password` at any depth.
-    password: `Bx-${randomUUID().slice(0, 20)}`,
-  }
-}
+export { GROUPS }
 
 export const IDENTITY_REGISTER: JourneyDefinition = {
   name: 'identity.register',
@@ -162,9 +112,9 @@ export const IDENTITY_REGISTER: JourneyDefinition = {
         ctx.skip('registration is rate limited')
       }
       ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
-      const accessToken = stringField(result.body, 'accessToken') ?? stringField(result.body, 'tokens', 'accessToken')
-      ctx.assert(accessToken !== null, 'registration returned no access token')
-      return accessToken as string
+      const token = accessToken(result.body)
+      ctx.assert(token !== null, 'registration returned no access token')
+      return token as string
     })
 
     await ctx.step('read the account back from the token', async () => {
@@ -201,25 +151,37 @@ export const IDENTITY_SIGNIN: JourneyDefinition = {
     })
 
     await ctx.step('sign in', async () => {
+      // ────────────────────────────────────────────────────────────────────────────────────────
+      // `identifier`, NOT `email`. This journey posted `{ email, password }` until 2026-08-03 and
+      // `@cloudsforge/contracts-auth`'s `validateLogin` has never read that field: it reads
+      // `identifier`, and decides email-or-handle by looking for an `@`. So every run of this
+      // CRITICAL journey answered 400 "an identifier and a password are required" and reported
+      // the product broken, which is the worst possible failure for a release gate — the gate
+      // refuses every release, the refusal is the gate's own bug, and the fix everyone reaches
+      // for is to switch the gate off.
+      //
+      // Found by running it against the dev estate rather than by reading it. Nothing in this
+      // repository could have caught it: the journeys had no tests at all, and a test that
+      // asserted "the journey posts the body the journey was written to post" would have passed.
+      // ────────────────────────────────────────────────────────────────────────────────────────
       const result = await call(ctx, `${identity}/auth/login`, {
         method: 'POST',
-        body: { email: account.email, password: account.password },
+        body: { identifier: account.email, password: account.password },
       })
       if (result.status === 429) ctx.skip('login is rate limited')
       ctx.assert(result.status === 200, `expected 200 from /auth/login, got ${result.status}`)
-      ctx.assert(
-        stringField(result.body, 'accessToken') !== null ||
-          stringField(result.body, 'tokens', 'accessToken') !== null,
-        'login returned no access token',
-      )
+      ctx.assert(accessToken(result.body) !== null, 'login returned no access token')
     })
 
     await ctx.step('the wrong password is refused', async () => {
       const result = await call(ctx, `${identity}/auth/login`, {
         method: 'POST',
-        body: { email: account.email, password: `${account.password}-wrong` },
+        body: { identifier: account.email, password: `${account.password}-wrong` },
       })
       if (result.status === 429) ctx.skip('login is rate limited')
+      // 401 exactly, never "any 4xx". A 400 here would mean the request was malformed — which is
+      // what the bug above produced — and accepting it would let a journey that never reached the
+      // password check report that the password check works.
       ctx.assert(result.status === 401, `expected 401 for a wrong password, got ${result.status}`)
     })
   },
@@ -234,6 +196,33 @@ export const IDENTITY_HANDOFF: JourneyDefinition = {
     const identity = ctx.target('identity')
     const account = throwaway()
 
+    // ──────────────────────────────────────────────────────────────────────────────────────────
+    // THE HAND-OFF IS BOUND TO AN ORIGIN, AND THIS JOURNEY POSTED NO ORIGIN AT ALL.
+    //
+    // `POST /auth/handoff` requires `redirectOrigin` and mints a code bound to it;
+    // `POST /auth/handoff/redeem` requires an `Origin` header and matches the two. That binding IS
+    // the security of the hand-off — without it an open redirect anywhere in the estate turns a
+    // legitimate sign-in into a token delivered to somebody else's page.
+    //
+    // Until 2026-08-03 this journey sent `body: {}` and no `Origin`, so identity answered 400
+    // "redirectOrigin is required" and the journey failed. A CRITICAL journey that can only fail
+    // refuses every release for ever, for a reason that is the monitor's own defect.
+    //
+    // The origin is configuration rather than a constant: it must be one identity's own
+    // `IDENTITY_HANDOFF_ORIGINS` allowlist names, which is a property of the deployment. Unset is
+    // a SKIP with the variable named — the same treatment `ctx.target` gives a service this
+    // deployment does not run. It is not a failure: an estate that has not configured SSO has not
+    // demonstrated a broken SSO.
+    // ──────────────────────────────────────────────────────────────────────────────────────────
+    const origin = process.env['BEACON_HANDOFF_ORIGIN']?.trim()
+    if (!origin) {
+      ctx.skip(
+        'BEACON_HANDOFF_ORIGIN is not set. It must be one of the origins identity accepts in ' +
+          'IDENTITY_HANDOFF_ORIGINS; a hand-off code is bound to an origin at mint and matched at ' +
+          'redemption, so there is nothing to mint against without one.',
+      )
+    }
+
     const token = await ctx.step('register', async () => {
       const result = await call(ctx, `${identity}/auth/register`, {
         method: 'POST',
@@ -241,32 +230,67 @@ export const IDENTITY_HANDOFF: JourneyDefinition = {
       })
       if (result.status === 429) ctx.skip('registration is rate limited')
       ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
-      const accessToken =
-        stringField(result.body, 'accessToken') ?? stringField(result.body, 'tokens', 'accessToken')
-      ctx.assert(accessToken !== null, 'registration returned no access token')
-      return accessToken as string
+      const registered = accessToken(result.body)
+      ctx.assert(registered !== null, 'registration returned no access token')
+      return registered as string
     })
 
     const code = await ctx.step('mint a handoff code', async () => {
-      const result = await call(ctx, `${identity}/auth/handoff`, { method: 'POST', token, body: {} })
-      ctx.assert(result.status === 201 || result.status === 200, `expected 2xx from /auth/handoff, got ${result.status}`)
+      const result = await call(ctx, `${identity}/auth/handoff`, {
+        method: 'POST',
+        token,
+        body: { redirectOrigin: origin },
+      })
+      if (result.status === 403) {
+        // The allowlist refusing an origin is the allowlist working. Skipping names the two
+        // variables that have to agree, which is what somebody reading this needs; failing would
+        // report identity broken when identity has just enforced its most important rule.
+        ctx.skip(
+          `identity refused "${origin}" as a hand-off origin. BEACON_HANDOFF_ORIGIN must appear in ` +
+            `identity's IDENTITY_HANDOFF_ORIGINS.`,
+        )
+      }
+      ctx.assert(
+        result.status === 201 || result.status === 200,
+        `expected 2xx from /auth/handoff, got ${result.status} — ${result.text.slice(0, 160)}`,
+      )
       const value = stringField(result.body, 'code')
       ctx.assert(value !== null, 'handoff returned no code')
       return value as string
     })
 
-    await ctx.step('redeem it in the other product', async () => {
+    const redeemed = await ctx.step('redeem it in the other product', async () => {
       const result = await call(ctx, `${identity}/auth/handoff/redeem`, {
         method: 'POST',
         body: { code },
+        headers: { origin: origin as string },
       })
-      ctx.assert(result.status === 200, `expected 200 from redeem, got ${result.status}`)
+      ctx.assert(
+        result.status === 200,
+        `expected 200 from redeem, got ${result.status} — ${result.text.slice(0, 160)}`,
+      )
+      const issued = accessToken(result.body)
+      // The point of a hand-off is a SESSION on the other product. A 200 carrying no token is a
+      // redemption that consumed the code and delivered nothing, which reads as success and is
+      // not one.
+      ctx.assert(issued !== null, 'the redemption answered 200 and issued no access token')
+      return issued as string
+    })
+
+    await ctx.step('the redeemed session is a real session', async () => {
+      const result = await call(ctx, `${identity}/auth/me`, { token: redeemed })
+      ctx.assert(result.status === 200, `the token from the hand-off answered ${result.status} at /auth/me`)
+      ctx.assert(
+        stringField(result.body, 'user', 'handle') === account.handle,
+        'the hand-off issued a session for a different account',
+      )
     })
 
     await ctx.step('the code is single use', async () => {
       const result = await call(ctx, `${identity}/auth/handoff/redeem`, {
         method: 'POST',
         body: { code },
+        headers: { origin: origin as string },
       })
       // THE security property of the handoff, and the reason this journey is critical rather than
       // convenient. A replayable code is a session anyone who saw one URL can take.
@@ -354,10 +378,14 @@ export const ESTATE_SERVICES: readonly string[] = [
   'worlds',
   'notify',
   'hub-api',
+  // Added with the ecosystem journeys, which is the first thing in this repository that needs
+  // activity to be reachable. A name here costs nothing when the deployment does not run the
+  // service — `estate.reachable` skips a target it has no address for.
+  'activity',
 ]
 
-/** The registry this build ships. `index.ts` syncs it into the table at boot. */
-export const JOURNEYS: readonly JourneyDefinition[] = [
+/** The six per-service journeys, before the cross-service ones are added. */
+export const SERVICE_JOURNEYS: readonly JourneyDefinition[] = [
   IDENTITY_REGISTER,
   IDENTITY_SIGNIN,
   IDENTITY_HANDOFF,
@@ -365,6 +393,18 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
   WORLDS_REGISTRY,
   ESTATE_REACHABLE,
 ]
+
+/**
+ * The registry this build ships. `index.ts` syncs it into the table at boot.
+ *
+ * The ecosystem set is assembled at import from the environment, because one of its members needs
+ * a credential and a journey with no credential to run with must be ABSENT rather than declared
+ * and skipping — the rule this file's header sets out. Browser journeys are added by `index.ts`
+ * rather than here: they need the browser configuration, and pulling `playwright-core`'s
+ * availability check into a module every test imports would make the whole suite depend on an
+ * optional dependency.
+ */
+export const JOURNEYS: readonly JourneyDefinition[] = [...SERVICE_JOURNEYS, ...ecosystemJourneys()]
 
 /** Re-exported so a caller can construct one in a test without importing the internals. */
 export type { JourneyContext }

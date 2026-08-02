@@ -14,7 +14,8 @@
     "gate": "node --import tsx src/cli.ts gate",
     "typecheck": "tsc --noEmit",
     "_test": "--test-concurrency=1 is required, not a preference: every database test file truncates this service's tables between cases, and node:test runs FILES in parallel by default. A TRUNCATE takes an AccessExclusiveLock, so one file's reset deadlocks against another file's inserts (40P01). Cases within a file already run in order.",
-    "test": "node --import tsx --test --test-concurrency=1 src/*.test.ts",
+    "_testGlob": "src/browser/*.test.ts is named EXPLICITLY. A shell glob does not recurse, so adding a directory under src/ and nothing else would have left its tests unrun while the suite went green — which is the same defect as a CI job that builds an image and never boots it.",
+    "test": "node --import tsx --test --test-concurrency=1 src/*.test.ts src/browser/*.test.ts",
     "build": "tsc -p tsconfig.build.json",
     "check": "pnpm typecheck && pnpm test"
   },
@@ -39,6 +40,21 @@
     "@cloudsforge/telemetry": "link:../runtime/packages/telemetry",
     "postgres": "^3.4.5",
     "tsx": "^4.19.2"
+  },
+  "_optionalDependencies": [
+    "playwright-core, NOT playwright. The full package downloads its own browser build at install",
+    "time and takes the image from roughly 200MB to 1.5GB; playwright-core is the same driver API",
+    "against a Chromium the image already has. The frozen repository recorded this reason at",
+    "stack/infra/beacon/src/browser.js:9-11 and it has not changed.",
+    "",
+    "OPTIONAL, so that a deployment choosing not to ship a browser installs nothing extra and every",
+    "browser journey skips with that reason rather than failing. src/browser/driver.ts declares the",
+    "slice of the API it uses structurally rather than importing its types, so `tsc` does not need",
+    "the package to be present either — an optional runtime dependency that is a mandatory build",
+    "dependency is not optional."
+  ],
+  "optionalDependencies": {
+    "playwright-core": "^1.49.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

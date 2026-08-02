@@ -156,6 +156,127 @@ export interface FakeTarget {
   close(): Promise<void>
 }
 
+/* ------------------------------------------------------------------ a whole fake estate */
+
+export interface FakeRequest {
+  readonly method: string
+  readonly path: string
+  readonly query: URLSearchParams
+  readonly headers: Readonly<Record<string, string>>
+  readonly body: Record<string, unknown>
+  /** The exact bytes, for an assertion about what was sent rather than about what it parsed to. */
+  readonly raw: string
+}
+
+export interface FakeReply {
+  readonly status: number
+  readonly body?: unknown
+}
+
+export type FakeHandler = (req: FakeRequest) => FakeReply
+
+export interface FakeEstate {
+  /** One address for every service. A journey resolves each through its own `ctx.target` name. */
+  readonly targets: Map<string, string>
+  readonly url: string
+  /** Every request that arrived, in order. */
+  readonly requests: readonly FakeRequest[]
+  /** Install or replace one route. `'POST /auth/login'`. */
+  route(key: string, handler: FakeHandler): void
+  close(): Promise<void>
+}
+
+/**
+ * One HTTP server standing in for the whole estate.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THIS EXISTS SO THAT EVERY JOURNEY ASSERTION CAN BE PROVED TO GO RED.**
+ *
+ * A journey suite that only ever runs against a healthy estate proves that the journey passes when
+ * nothing is wrong, which is the least interesting thing about it. The pattern every test in
+ * `estate.test.ts` and `ecosystem.test.ts` follows is: stand up an estate that answers exactly
+ * what the real services answer, prove the journey passes, then break ONE property, prove the
+ * journey reports `fail` and names the step — and prove it is `fail` rather than `error`, because
+ * that distinction is what sends the investigation to the right team.
+ *
+ * The shapes the tests install were read off the running dev estate on 2026-08-03, not invented:
+ * a fake whose answers no real service would give proves the journey handles a case that cannot
+ * happen.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export async function fakeEstate(names: readonly string[] = []): Promise<FakeEstate> {
+  const handlers = new Map<string, FakeHandler>()
+  const requests: FakeRequest[] = []
+  const open = new Set<import('node:net').Socket>()
+
+  const server: Server = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      const url = new URL(req.url ?? '/', 'http://estate.test')
+      let body: Record<string, unknown> = {}
+      if (raw.length > 0) {
+        try {
+          const parsed: unknown = JSON.parse(raw)
+          if (typeof parsed === 'object' && parsed !== null) body = parsed as Record<string, unknown>
+        } catch {
+          body = {}
+        }
+      }
+      const headers: Record<string, string> = {}
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (typeof value === 'string') headers[key.toLowerCase()] = value
+      }
+      const request: FakeRequest = {
+        method: req.method ?? 'GET',
+        path: url.pathname,
+        query: url.searchParams,
+        headers,
+        body,
+        raw,
+      }
+      requests.push(request)
+
+      const handler = handlers.get(`${request.method} ${request.path}`)
+      const reply: FakeReply = handler
+        ? handler(request)
+        : { status: 404, body: { error: { code: 'not_found', message: `no fake route for ${request.method} ${request.path}` } } }
+      const payload = reply.body === undefined ? '' : `${JSON.stringify(reply.body)}\n`
+      res.writeHead(reply.status, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(payload),
+      })
+      res.end(payload)
+    })
+  })
+  server.on('connection', (socket) => {
+    open.add(socket)
+    socket.on('close', () => open.delete(socket))
+  })
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  const port = (server.address() as AddressInfo).port
+  const url = `http://127.0.0.1:${port}`
+
+  const targets = new Map<string, string>()
+  for (const name of names) targets.set(name, url)
+
+  return {
+    targets,
+    url,
+    requests,
+    route(key, handler) {
+      handlers.set(key, handler)
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of open) socket.destroy()
+        server.close(() => resolve())
+      }),
+  }
+}
+
 export async function fakeTarget(): Promise<FakeTarget> {
   const hits: string[] = []
   let status = 200

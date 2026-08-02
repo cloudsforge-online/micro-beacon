@@ -38,6 +38,8 @@ import { SCHEMA_VERSION } from './migrations.ts'
 import { createServer, registerServiceMetrics, scrapeRefresh } from './server.ts'
 import { registerHandlers, rescheduleRecurring, sampleQueue, seedRecurring } from './jobs.ts'
 import { JOURNEYS } from './estate.ts'
+import { browserJourneys, undeclared } from './browser/journeys.ts'
+import { scoreboard } from './claims.ts'
 import { syncRegistry } from './journeys.ts'
 
 // 1. Environment. Importing `./env.ts` validated it; a missing or placeholder secret has already
@@ -53,15 +55,35 @@ const logger = new Logger({
   env: env.env,
 })
 const metrics = registerServiceMetrics(registerJobMetrics(registerHttpMetrics(new Metrics())))
+
+// The browser set is computed from the catalogue and the configured addresses, never written down.
+// It is empty in every deployment that exists today, because no compose file serves a frontend
+// container for a browser to point at — doc 22 §8.7. `undeclared` is logged rather than the count
+// alone: "0 browser journeys" reads as an oversight, and "BJ-XS-10: no address for site, hub, …"
+// reads as the one deploy change that would turn it on.
+const browserConfig = {
+  enabled: env.browserEnabled,
+  executablePath: env.browserExecutable,
+  timeoutMs: env.browserTimeoutMs,
+}
+const browserRegistry = { config: browserConfig, targets: new Set(env.targets.keys()) }
+const ALL_JOURNEYS = [...JOURNEYS, ...browserJourneys(browserRegistry)]
+
 logger.info('starting', {
   version: env.version,
   schemaVersion: SCHEMA_VERSION,
-  journeys: JOURNEYS.length,
+  journeys: ALL_JOURNEYS.length,
+  browserJourneys: ALL_JOURNEYS.length - JOURNEYS.length,
+  browserUndeclared: undeclared(browserRegistry),
   targets: [...env.targets.keys()],
   // Said at boot, because a public status page that is switched off looks exactly like one that
   // is broken until somebody reads the environment.
   publicStatus: env.publicStatus,
   gateConsecutiveGreen: env.gateConsecutiveGreen,
+  // The eleven "one platform" claims, as a number beside the version tag. 17 §7's table has said
+  // "three of eleven are true" since it was written and nothing recomputes it; this does, from the
+  // journeys this build actually declares.
+  platformClaims: scoreboard(),
 })
 
 // 3. The database pool. Opened before the schema assertion for the obvious reason that the
@@ -85,7 +107,7 @@ try {
 
 // 5. Reconcile the code journey registry into the table. A data write, not DDL — which is why it
 //    is here and not in the migrator. Operator state (`muted`) is preserved; see `syncRegistry`.
-await syncRegistry(db, JOURNEYS)
+await syncRegistry(db, ALL_JOURNEYS)
 
 // 6. The Lifecycle and its probes, before the routes, because `/readyz` is a route and it needs
 //    something to report.
@@ -182,7 +204,7 @@ registerHandlers(runner, {
   metrics,
   queue,
   thresholds: { failThreshold: env.failThreshold, recoverThreshold: env.recoverThreshold },
-  journeys: JOURNEYS,
+  journeys: ALL_JOURNEYS,
   targets: env.targets,
   journeyDeadlineMs: env.journeyDeadlineMs,
   journeyIntervalMs: env.journeyIntervalMs,
