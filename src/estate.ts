@@ -21,12 +21,37 @@
  * than an absence somebody has to notice. Adding one is this file plus one row.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
- * Every route below was read out of the service that serves it, not out of a document:
- * `identity/src/server.ts:655` (`/auth/register`), `:691` (`/auth/login`), `:891` (`/auth/me`),
- * `:1035` (`/auth/handoff`), `:1043` (`/auth/handoff/redeem`), `market/src/server.ts:618`
- * (`/v1/listings`), `worlds/src/server.ts:467` (`/v1/titles`). Two of the estate's own
- * architecture documents were found stale while this repository was being written, so a route
- * taken from prose is a route that has not been checked.
+ * Every route below was read out of the service that serves it, not out of a document. Two of the
+ * estate's own architecture documents were found stale while this repository was being written, so
+ * a route taken from prose is a route that has not been checked.
+ *
+ *   POST /auth/register          identity/src/server.ts
+ *   POST /auth/login             identity/src/server.ts
+ *   GET  /auth/me                identity/src/server.ts
+ *   POST /auth/handoff           identity/src/server.ts
+ *   POST /auth/handoff/redeem    identity/src/server.ts
+ *   GET  /v1/listings            market/src/server.ts
+ *   POST /v1/titles              worlds/src/server.ts
+ *
+ * **These citations name a route and not a line, and that is a correction rather than a style
+ * choice.** The list carried line numbers until the audit that produced this comment checked them.
+ * Two were wrong in the way that is worst — they resolved, to real code that was not the route
+ * claimed. `worlds/src/server.ts:467` pointed into the entitlement handler's `recordGrant` call;
+ * `POST /v1/titles` is nowhere near it. `market/src/server.ts:618` pointed at the collections
+ * block; `/v1/listings` is further down. A citation that fails loudly is a citation somebody
+ * fixes. A citation that lands on plausible unrelated code is one a reader believes.
+ *
+ * The remaining five were all correct, and then stopped being correct while this very comment was
+ * being edited: an eight-line change inside `POST /auth/register` — which is upstream of the other
+ * four in the same file — moved every one of them. Nothing about that change was careless, no
+ * reviewer of it would think to look here, and no test anywhere in the estate could have caught
+ * it. That is the whole case: a line number is a claim about a file that any edit to an earlier
+ * part of that file silently falsifies, and it is asserted from a repository that cannot see the
+ * file at all.
+ *
+ * A method and a path are the same fact stated in a form that survives. They are also directly
+ * resolvable — `grep -n "define('POST', '/v1/titles'" worlds/src/server.ts` — which is what a
+ * line number was standing in for, done in a way that cannot rot.
  */
 
 import { randomUUID } from 'node:crypto'
