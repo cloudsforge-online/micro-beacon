@@ -1,15 +1,17 @@
 # syntax=docker/dockerfile:1.7
 #
-# Build context is this repository, plus one named context for the unpublished runtime packages:
+# Build context is this repository, plus two named contexts for the unpublished sibling packages:
 #
-#   docker build -t beacon --build-context runtimepkgs=../runtime .
+#   docker build -t beacon \
+#     --build-context runtimepkgs=../runtime \
+#     --build-context contractspkgs=../contracts .
 #
-# The extra context is temporary. Once the @cloudsforge/* packages are published (AD-02),
-# package.json takes registry versions, the COPY lines marked below are deleted, the flag goes
+# Both extra contexts are temporary. Once the @cloudsforge/* packages are published (AD-02),
+# package.json takes registry versions, the COPY lines marked below are deleted, the flags go
 # away, and this becomes an ordinary single-context build. Nothing else changes.
 #
-# It is named `runtimepkgs` rather than `runtime` because a build context and a build stage share
-# one namespace, and the final stage below is called `runtime`.
+# They are named `runtimepkgs`/`contractspkgs` rather than `runtime`/`contracts` because a build
+# context and a build stage share one namespace, and the final stage below is called `runtime`.
 
 # ----------------------------------------------------------------------------------- deps
 FROM node:22-slim AS deps
@@ -20,19 +22,30 @@ FROM node:22-slim AS deps
 RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 WORKDIR /app
 
-# Temporary: the link: dependencies resolve to ../runtime relative to this directory, so the
-# packages must exist at that path inside the image for the lockfile to stay frozen. `link:` in
-# particular resolves at install time to the sibling's own node_modules.
+# Temporary: the link: dependencies resolve to ../runtime and ../contracts relative to this
+# directory, so the packages must exist at those paths inside the image for the lockfile to stay
+# frozen. `link:` in particular resolves at install time to the sibling's own node_modules.
 COPY --from=runtimepkgs package.json pnpm-workspace.yaml pnpm-lock.yaml /runtime/
 COPY --from=runtimepkgs packages /runtime/packages
+# THESE TWO LINES WERE MISSING, and the first honest run of the image job is what said so:
+# `package.json` has taken `@cloudsforge/contracts-auth: link:../contracts/packages/auth` for the
+# life of this service, and `link:` to a path that does not exist installs a DANGLING symlink
+# rather than failing — so `pnpm install --frozen-lockfile` was green and `pnpm typecheck` in the
+# build stage below died on `src/ecosystem.ts(70,32): TS2307: Cannot find module
+# '@cloudsforge/contracts-auth'`. The build job never saw it because THAT job checks the contracts
+# repository out as a sibling; only the image was missing it. tessera's Dockerfile carries the
+# same note about the same two lines.
+COPY --from=contractspkgs package.json pnpm-workspace.yaml pnpm-lock.yaml /contracts/
+COPY --from=contractspkgs packages /contracts/packages
 
-# Install the runtime workspace's OWN dependencies first. `link:` uses the sibling as-is and
+# Install the siblings' OWN dependencies first. `link:` uses the sibling as-is and
 # does not manage its dependency tree, so /runtime's node_modules must exist independently —
 # both for `tsc` to resolve the runtime source it typechecks (jose, @opentelemetry/api) and
 # for `node --import tsx` to load @cloudsforge/* at run time. Without this the image builds a
 # set of @cloudsforge symlinks that point at source which cannot resolve its own imports.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store,sharing=locked \
-    pnpm --dir /runtime install --frozen-lockfile --config.store-dir=/pnpm-store
+    pnpm --dir /runtime install --frozen-lockfile --config.store-dir=/pnpm-store \
+ && pnpm --dir /contracts install --frozen-lockfile --config.store-dir=/pnpm-store
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # `--frozen-lockfile` is the point of the step: a build that silently resolves a different
@@ -56,10 +69,11 @@ WORKDIR /app
 
 # No corepack, no pnpm, no build toolchain in the final image: fewer things an RCE can reach, and
 # nothing at runtime needs them.
-# `/runtime` comes across too: /app/node_modules holds @cloudsforge/* as symlinks into it,
-# so without the target the links dangle and the first `import '@cloudsforge/db'` fails at
-# run time.
+# `/runtime` and `/contracts` come across too: /app/node_modules holds @cloudsforge/* as symlinks
+# into them, so without the targets the links dangle and the first `import '@cloudsforge/db'` —
+# or `'@cloudsforge/contracts-auth'` — fails at run time.
 COPY --from=build /runtime /runtime
+COPY --from=build /contracts /contracts
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/tsconfig.json /app/tsconfig.base.json ./
