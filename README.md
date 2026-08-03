@@ -306,6 +306,21 @@ never recorded an entry is the same defect as a CI job that builds an image and 
 them, with a cited blocker where none does. Its test refuses a claim marked `partly` or `proven`
 that names no journey.
 
+All four declared ecosystem journeys were run against the dev estate on 2026-08-03 and pass —
+`event-bus` in 1.0s, `one-activity` in 0.8s, `one-portfolio` in 0.1s, `one-account` in 0.8s.
+
+#### What running them found, that is not beacon's to fix
+
+Recorded here because each was invisible from inside the service that owns it, which is the whole
+argument for this tier existing. None is fixed in this repository.
+
+| Finding | Where | Why it matters |
+| --- | --- | --- |
+| `identity.user.registered` has **no subscription row at all** — `event_subscriptions` in the dev estate carries only `identity.session.created` (to activity) and `identity.user.deleted` (to activity and notify) | the estate's bootstrap | "Your account was created" is classified, user-visible and never delivered. The feed's first entry is a sign-in. |
+| `IDENTITY_HANDOFF_ORIGINS` is not set in `deploy/compose/docker-compose.estate.yml` | `micro-deploy` | SSO hand-off cannot be exercised at all, in a browser or over HTTP. Vision claim 1 is unprovable in the dev estate. |
+| `IDENTITY_SERVICE_TOKEN_GRANTS` names thirteen services and not `beacon`; `POST /service-credentials` answers **500**, not 4xx, for an unconfigured service | `micro-deploy`, `micro-identity` | Beacon can hold no scoped token, so the ledger, custody and reconciliation claims stay unproven. The 500 is a second, smaller defect: a configuration error reported as an internal one. |
+| hub-api's activity tile answered `unavailable (activity answered 401)` eleven minutes after the estate came up | the ten-minute cliff, `deploy/README.md` | Reproduced exactly. Classified as an `error` rather than a `fail` per doc 22 §4.1 — the environment expired, the product did not. |
+
 ### 7.3 The browser tier — `src/browser/`
 
 Doc 22 puts tier 3 — the 86 scenarios that need the estate, the frontends and a sign-in surface —
