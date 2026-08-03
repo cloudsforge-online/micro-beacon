@@ -63,16 +63,21 @@ export const CLAIMS: readonly Claim[] = [
     evidence:
       'A journey signing into all eight surfaces from one session, with no second credential prompt.',
     status: 'partly',
-    journeys: ['identity.handoff', 'ecosystem.one-account'],
+    journeys: ['identity.handoff', 'ecosystem.one-account', 'browser.bj-acc-01', 'browser.bj-acc-03'],
     gap:
       'The HTTP half is proven: a handoff code is minted, redeemed once and refused the second ' +
       'time, and one access token resolves to the same subject in identity, hub-api and activity. ' +
-      'The demonstration asks for eight SURFACES, and no surface can sign a browser in at all — ' +
-      'nothing in the estate serves /login (doc 22 §8.1). A second, independent defect blocks it ' +
-      'even once one exists: @cloudsforge/ui posts the callback code to ${nimbus}/auth/exchange ' +
-      'and micro-identity serves POST /auth/handoff/redeem. Beyond that, identity.handoff can ' +
-      'only skip in the dev estate today, because IDENTITY_HANDOFF_ORIGINS is unset in ' +
-      'deploy/compose/docker-compose.estate.yml and an empty allowlist refuses every mint.',
+      'A BROWSER can now sign in too, which is new and was checked by driving it rather than by ' +
+      'reading: browser.bj-acc-01 registers through the page hub-web serves at ' +
+      'hub.<apex>/account/register and lands on a surface rendering the account it created, and ' +
+      'browser.bj-acc-03 proves a protected deep link survives the round trip. All three reasons ' +
+      'recorded here previously are closed — /login is served, @cloudsforge/ui posts to ' +
+      '/auth/handoff/redeem which identity serves, and IDENTITY_HANDOFF_ORIGINS is set in ' +
+      'deploy/compose/docker-compose.estate.yml. What is still missing is the DEMONSTRATION ' +
+      'ITSELF: it asks for one session crossing eight surfaces, and BJ-XS-01 — Hub to Worlds to ' +
+      'Market with no second prompt — is unblocked and unimplemented in ' +
+      'src/browser/journeys.ts, which names it in unimplemented(). One surface ' +
+      'signing a browser in is not eight.',
   },
   {
     n: 2,

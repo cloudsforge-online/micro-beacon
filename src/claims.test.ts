@@ -22,8 +22,17 @@ import { CLAIMS, citedJourneys, scoreboard, unresolvedJourneys } from './claims.
 import { SERVICE_JOURNEYS } from './estate.ts'
 import { ALL_ECOSYSTEM_JOURNEYS } from './ecosystem.ts'
 import { T3_SCENARIOS } from './browser/catalogue.ts'
+import { browserJourneys } from './browser/journeys.ts'
 
-const EVERYTHING = [...SERVICE_JOURNEYS, ...ALL_ECOSYSTEM_JOURNEYS]
+// The browser tier is part of the registry this build ships, so a claim may cite one. Computed
+// with every name in the catalogue addressable, because the question here is what this BUILD
+// implements — not what one deployment happens to have configured, which is `undeclared()`'s job.
+const BROWSER = browserJourneys({
+  config: { enabled: false, executablePath: '', timeoutMs: 30_000 },
+  targets: new Set(T3_SCENARIOS.flatMap((s) => s.needs)),
+})
+
+const EVERYTHING = [...SERVICE_JOURNEYS, ...ALL_ECOSYSTEM_JOURNEYS, ...BROWSER]
 
 test('all eleven claims are present, numbered 1 to 11', () => {
   assert.equal(CLAIMS.length, 11)
@@ -82,9 +91,13 @@ test('nothing is claimed as proven, which is the honest state today', () => {
 })
 
 test('the claims that browser scenarios would move point at scenarios that exist', () => {
-  // Claims 1, 3, 6, 7 and 9 all cite doc 22 blockers. Each of those blockers has scenarios behind
-  // it in the T3 catalogue, so "blocked on a screen that does not exist" is a statement with a
-  // list attached rather than an assertion.
+  // Claims 3, 6, 7 and 9 cite doc 22 blockers. Each of those blockers has scenarios behind it in
+  // the T3 catalogue, so "blocked on a screen that does not exist" is a statement with a list
+  // attached rather than an assertion.
+  //
+  // Claim 1 used to be in that list and is not any more: it cited §8.1, the sign-in blocker, which
+  // is closed. This test is what caught the stale citation when the blocker was removed — a claim
+  // pointing at a gap that no longer exists reads as evidence of a problem that has been fixed.
   const docs = new Set(T3_SCENARIOS.map((s) => s.blocked?.doc).filter((d): d is string => Boolean(d)))
   for (const claim of CLAIMS) {
     const cited = (claim.gap ?? '').match(/doc 22 §8\.\d/g) ?? []
