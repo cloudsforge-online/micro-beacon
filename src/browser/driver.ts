@@ -65,6 +65,8 @@ interface Chromium {
     newContext(options: unknown): Promise<{ newPage(): Promise<BrowserPage> }>
     close(): Promise<void>
   }>
+  /** Where playwright would look for its own Chromium. Throws when none is registered. */
+  executablePath(): string
 }
 
 /* ------------------------------------------------------------------ availability */
@@ -76,13 +78,33 @@ export interface BrowserConfig {
   readonly timeoutMs: number
 }
 
-export type Availability = { readonly ok: true } | { readonly ok: false; readonly reason: string }
+export type Availability =
+  | { readonly ok: true; readonly executablePath: string }
+  | { readonly ok: false; readonly reason: string }
 
 /**
  * Is there a browser to drive?
  *
  * Answers a reason rather than a boolean, because every caller puts the reason in a skip and a
  * skip whose reason is "no" is a skip nobody can act on.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE PACKAGE BEING INSTALLED IS NOT THE BROWSER EXISTING, AND CONFLATING THEM COST A CI RUN.**
+ *
+ * The first version of this checked `config.executablePath` only when one was configured, and
+ * otherwise reported available on the strength of the import alone — "let playwright find its
+ * own". CI installs `playwright-core` and downloads no browser, so `browserAvailable` said yes and
+ * `chromium.launch()` then threw `Executable doesn't exist at …/chrome-headless-shell`. Five cases
+ * went red for a reason that is not a defect in anything they test.
+ *
+ * In the service the same mistake is worse than a red build: a container with the package and no
+ * browser would FAIL every browser journey rather than skipping it, which turns a deployment
+ * decision into an outage on the status page.
+ *
+ * So the executable is resolved and stat'd either way — from the configured path, or from the one
+ * `playwright-core` itself would use. It is the difference between asking whether the driver is
+ * installed and asking whether there is a browser.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
  * The result is NOT cached. The frozen helper cached it for the life of the process, which is a
  * false economy in a service that runs for weeks: a browser installed by a base-image update, or
@@ -92,25 +114,37 @@ export type Availability = { readonly ok: true } | { readonly ok: false; readonl
 export async function browserAvailable(config: BrowserConfig): Promise<Availability> {
   if (!config.enabled) return { ok: false, reason: 'BEACON_BROWSER_ENABLED is false' }
 
+  let chromium: Chromium
   try {
-    await import('playwright-core')
+    ;({ chromium } = (await import('playwright-core')) as unknown as { chromium: Chromium })
   } catch (err) {
-    const detail = err instanceof Error ? err.message.split('\n')[0] : String(err)
+    const detail = err instanceof Error ? (err.message.split('\n')[0] ?? '') : String(err)
     return { ok: false, reason: `playwright-core is not installed (${detail})` }
   }
 
-  if (config.executablePath.length > 0) {
+  let executablePath = config.executablePath
+  if (executablePath.length === 0) {
     try {
-      await access(config.executablePath, constants.X_OK)
-    } catch {
+      executablePath = chromium.executablePath()
+    } catch (err) {
+      const detail = err instanceof Error ? (err.message.split('\n')[0] ?? '') : String(err)
       return {
         ok: false,
-        reason: `no executable browser at ${config.executablePath} — set BEACON_BROWSER_EXECUTABLE`,
+        reason: `playwright-core cannot name a browser executable (${detail}) — set BEACON_BROWSER_EXECUTABLE`,
       }
     }
   }
 
-  return { ok: true }
+  try {
+    await access(executablePath, constants.X_OK)
+  } catch {
+    return {
+      ok: false,
+      reason: `no executable browser at ${executablePath} — set BEACON_BROWSER_EXECUTABLE`,
+    }
+  }
+
+  return { ok: true, executablePath }
 }
 
 /* ------------------------------------------------------------------ what a page did wrong */
@@ -252,7 +286,10 @@ export async function withPage<T>(
 
   const { chromium } = (await import('playwright-core')) as unknown as { chromium: Chromium }
   const browser = await chromium.launch({
-    ...(config.executablePath.length > 0 ? { executablePath: config.executablePath } : {}),
+    // The path `browserAvailable` resolved and stat'd, never the raw configuration. Launching
+    // against a path nothing checked is how "the package is installed" gets mistaken for "there is
+    // a browser".
+    executablePath: availability.executablePath,
     // --no-sandbox because the container runs as root; --disable-dev-shm-usage because Docker's
     // default 64MB /dev/shm makes Chromium crash on any non-trivial page, and a crashed browser
     // reports as a failing journey rather than as the misconfiguration it is.

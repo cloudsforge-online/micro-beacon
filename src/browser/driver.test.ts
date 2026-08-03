@@ -283,3 +283,25 @@ test('a page that renders but throws goes red on the exception', { skip: noBrows
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })
+
+test('the package being installed is not the browser existing', async () => {
+  // The CI failure this check exists for. `playwright-core` is installed there and no browser is
+  // downloaded, so an availability check that stopped at the import reported yes and
+  // `chromium.launch()` threw. In the service that is worse than a red build: a container with the
+  // package and no browser would FAIL every browser journey instead of skipping it.
+  const state = await browserAvailable({
+    enabled: true,
+    executablePath: '/definitely/not/a/browser',
+    timeoutMs: 1000,
+  })
+  assert.equal(state.ok, false)
+  assert.match(state.ok ? '' : state.reason, /no executable browser at/)
+})
+
+test('an available browser answers with the path it resolved', { skip: noBrowser }, async () => {
+  const state = await browserAvailable(CONFIG)
+  assert.equal(state.ok, true)
+  // Returned rather than recomputed at launch, so the thing that was stat'd is the thing that is
+  // launched. Two resolutions of "which browser" is one resolution too many.
+  assert.ok(state.ok && state.executablePath.length > 0)
+})
