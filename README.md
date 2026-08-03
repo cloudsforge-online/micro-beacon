@@ -237,18 +237,20 @@ Windows, tiers and the 50 / 75 / 100 % policy come from 13-operational-model.md 
 
 ## 7. Journeys
 
-Definitions are code (`src/estate.ts`); operator state (`muted`) is a row, preserved across
-deploys. Scheduling is a leased job.
+Definitions are code (`src/estate.ts`, `src/ecosystem.ts`, `src/browser/`); operator state
+(`muted`) is a row, preserved across deploys. Scheduling is a leased job.
 
 **Only journeys that actually exercise something are declared.** The critical-path set in
 13-operational-model.md:435 is nine — register, sign in, SSO handoff, deposit, convert, spend,
-withdraw, mint deploy, market purchase. This build ships six real journeys:
+withdraw, mint deploy, market purchase.
+
+### 7.1 Per-service journeys — `src/estate.ts`
 
 | Journey | Critical | Status |
 | --- | --- | --- |
 | `identity.register` | yes | implemented |
-| `identity.signin` | yes | implemented |
-| `identity.handoff` | yes | implemented, including the single-use assertion |
+| `identity.signin` | yes | implemented — **fixed 2026-08-03, see below** |
+| `identity.handoff` | yes | implemented, including the single-use assertion — **fixed 2026-08-03** |
 | `estate.reachable` | yes | implemented |
 | `market.catalogue` | no | implemented |
 | `worlds.registry` | no | implemented |
@@ -260,9 +262,75 @@ because a skip is not a pass — and a gate that refuses everything is a gate th
 within a week. A declared-but-faked journey would report green and make the gate a lie, which is
 worse than not having one. Adding a real one is this file plus one row.
 
-Every route a journey calls was read out of the service that serves it, never out of a document:
-`identity/src/server.ts:655,691,891,1035,1043`, `market/src/server.ts:618,596`,
-`worlds/src/server.ts:467`.
+**Two of the six could only ever fail, and there were no tests here at all.** Found on 2026-08-03
+by running them against the dev estate:
+
+* `identity.signin` posted `{ email, password }` to `POST /auth/login`.
+  `@cloudsforge/contracts-auth`'s `validateLogin` reads `identifier` and has never read `email`, so
+  identity answered `400 an identifier and a password are required` on every run.
+* `identity.handoff` posted `{}` to `POST /auth/handoff`, which requires `redirectOrigin`, and
+  redeemed without the `Origin` header the redemption route requires. 400 on every run.
+
+Both are critical, so the gate refused every release — for the monitor's own defect, reported as
+the product being broken. That is the worst failure a release gate has, because the fix everybody
+reaches for is to switch the gate off. `src/estate.test.ts` now drives all six against a fake
+estate that answers what the real services answer, and every assertion is proved to go red.
+
+`identity.handoff` needs `BEACON_HANDOFF_ORIGIN` and **skips**, naming the variable, without one.
+The dev estate does not set `IDENTITY_HANDOFF_ORIGINS` at all, so the hand-off is unproven there
+and says so.
+
+### 7.2 Ecosystem journeys — `src/ecosystem.ts`
+
+Cross-service journeys: the seams no single service's suite can express. If one service's tests
+could assert it, it does not belong there.
+
+| Journey | Proves | Declared |
+| --- | --- | --- |
+| `ecosystem.event-bus` | a fact committed in identity reaches activity's read model through the real outbox, signature and inbox — exactly once, in the right person's feed and no one else's | yes |
+| `ecosystem.one-activity` | activity and hub-api serve the same record byte for byte, with the cursor passed back unparsed | yes |
+| `ecosystem.one-portfolio` | hub's two paths to one portfolio total — the dashboard tile and the portfolio page, separately cached — agree on the whole payload including `pricedAt` | yes |
+| `ecosystem.one-account` | one access token resolves to one subject in identity, hub-api and activity, and none of the three serves without it | yes |
+| `ecosystem.trial-balance` | Σ debits − Σ credits is exactly zero **over a journal with entries in it** | **only with `BEACON_SERVICE_CREDENTIAL`** |
+
+`ecosystem.trial-balance` is absent rather than skipping because beacon cannot hold a credential
+today: `IDENTITY_SERVICE_TOKEN_GRANTS` in `deploy/compose/docker-compose.estate.yml` names thirteen
+services and `beacon` is not among them, so `POST /service-credentials` answers 500 *"no scopes are
+configured for service 'beacon'"*. One line there and one variable here declares it.
+
+Note what that journey refuses to do: **a zero trial balance over an empty journal is a skip, not a
+pass.** Zero minus zero is zero, and publishing a green reconciliation signal for a ledger that has
+never recorded an entry is the same defect as a CI job that builds an image and never boots it.
+
+`src/claims.ts` maps the eleven "one platform" statements in 01 §2 onto the journeys that move
+them, with a cited blocker where none does. Its test refuses a claim marked `partly` or `proven`
+that names no journey.
+
+### 7.3 The browser tier — `src/browser/`
+
+Doc 22 puts tier 3 — the 86 scenarios that need the estate, the frontends and a sign-in surface —
+in this repository, and tiers 1 and 2 beside their bundles. The catalogue is `catalogue.ts`, the
+`playwright-core` harness is `driver.ts`, and the declaration is **computed** in `journeys.ts`: a
+scenario becomes a journey only when it carries no permanent blocker, every surface it needs has an
+address, and an implementation exists.
+
+**Today that is the empty set, and that is the correct answer.**
+`deploy/compose/docker-compose.estate.yml` serves no frontend container (doc 22 §8.7), so there is
+nowhere to point a tab. Eighty of the eighty-six carry a deeper blocker as well — chiefly that
+nothing in the estate serves a sign-in page, so a browser cannot establish a session. Six need
+nothing but an address: `BJ-NET-09`, `BJ-NET-14`, `BJ-NET-18`, `BJ-NET-20`, `BJ-NET-21` and
+`BJ-XS-10`, of which `BJ-XS-10` is implemented. `index.ts` logs the reason per scenario at boot,
+because "0 browser journeys" reads as an oversight and "no address for site, hub, …" reads as a
+deploy change.
+
+The harness itself is proved, with and without a browser. `assertRendered` and `assertClean` are
+pure functions checked in every run; against a real Chromium, a page whose bundle 404s is required
+to go **red** while its shell answers 200 — which is the entire argument for a browser tier, since
+`domcontentloaded` fires on the empty shell and a missing chunk leaves the network perfectly idle.
+
+Every route a journey calls was read out of the service that serves it, never out of a document.
+Method and path rather than line numbers, for the reason `src/estate.ts`'s header sets out at
+length.
 
 ---
 
