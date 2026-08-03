@@ -3,6 +3,8 @@
 Synthetic probes, user journeys, incidents, SLOs and error budgets, conformance runs, Prometheus
 metrics, and the redacted public status projection that `status-web` renders.
 
+Design authority: [`ecosystem/13-operational-model.md`](https://github.com/cloudsforge-online/micro-docs/blob/main/ecosystem/13-operational-model.md)
+
 **It is the release gate (AD-04).** A release is promoted only if Beacon says the estate's journeys
 pass and the error budget allows it. That decision is an endpoint and a CLI exit code, not a
 dashboard someone reads.
@@ -399,3 +401,10 @@ a way to put a false outage on the public status page.
 * **Strict TypeScript, ESM, Node ≥ 22**, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`.
 * **No secret in the repository.** `.env.example` carries `CHANGE_ME` and CI checks that it still
   does.
+
+---
+
+## Provenance
+
+The code in this repository was written by **Claude Opus 5** and **Claude Fable 5**, under
+human direction and review.
