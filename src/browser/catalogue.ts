@@ -108,22 +108,36 @@ export interface Scenario {
 
 /* ------------------------------------------------------------------ the blockers, once each */
 
-const NO_SIGNIN: Blocker = {
-  reason:
-    'nothing in the estate serves a sign-in page. Every SPA sends the browser to ' +
-    '`${accountUrl()}/login`, no repository serves /login, and micro-identity renders no HTML at ' +
-    'all. A browser cannot establish a session, so neither can any scenario downstream of one.',
-  doc: '22 §8.1',
-}
-
-const EXCHANGE_ROUTE: Blocker = {
-  reason:
-    'the shared UI and micro-identity do not agree on the redemption route: consumeAuthCallback ' +
-    'posts the code to ${nimbus}/auth/exchange and identity serves POST /auth/handoff and ' +
-    'POST /auth/handoff/redeem. This is a defect independent of the catalogue and blocks SSO in a ' +
-    'browser even once a sign-in page exists.',
-  doc: '22 §8.1',
-}
+/*
+ * ── THREE BLOCKERS ARE GONE, AND THEY WERE REMOVED BY DRIVING THEM, NOT BY READING ──────────────
+ *
+ * `NO_SIGNIN`, `EXCHANGE_ROUTE` and `SESSION_DOWNSTREAM` stood here and blocked forty-four of the
+ * eighty-seven rows below. All three premises are now false, and each was checked in Chromium
+ * against the running estate rather than against a document:
+ *
+ *   * NO_SIGNIN said "nothing in the estate serves a sign-in page… micro-identity renders no HTML
+ *     at all". micro-ui added a `signin` registry row riding on Hub and micro-hub-web serves the
+ *     page (`hub-web/src/pages/account.tsx`). Driven: `GET hub.<apex>/account/register` answers
+ *     200 and renders the form; filling it and pressing Create account lands the browser on
+ *     `hub.<apex>/` holding `cf.accessToken` and `cf.refreshToken`, with the handle rendered in
+ *     the account menu.
+ *
+ *   * EXCHANGE_ROUTE said the shared UI posts to `${nimbus}/auth/exchange` while identity serves
+ *     `/auth/handoff/redeem`. The UI was corrected — `ui/packages/ui/src/auth.test.ts:9-14` records
+ *     the address that actually shipped and the correction — and `deploy/scripts/estate-verify.sh`
+ *     drives the whole hand-off through the gateway: minted at Hub for Market, redeemed from
+ *     Market's origin, refused from a foreign one.
+ *
+ *   * SESSION_DOWNSTREAM said "no page in the estate can sign a browser in", which is the same
+ *     claim as NO_SIGNIN and falls with it. Driven twice more: a protected deep link
+ *     (`hub.<apex>/security`) redirects to `/account/login?return=…`, and signing in there ARRIVES
+ *     AT THE DEEP LINK rather than at the root — which is BJ-ACC-03 in full.
+ *
+ * Removing a blocker does NOT declare a journey. It moves the scenario from "cannot be written" to
+ * "not written yet", which `journeys.ts`'s `unimplemented()` names one line at a time. That is the
+ * distinction the whole file turns on, and it is why the removals are safe: nothing goes green
+ * because of them.
+ */
 
 const NO_WALLET_WRITE: Blocker = {
   reason:
@@ -177,15 +191,6 @@ const NO_NOTIFY_UI: Blocker = {
   doc: '22 §8.6',
 }
 
-/** Doc 22 leaves the row unmarked; §8.1’s own sentence covers it. See the file header. */
-const SESSION_DOWNSTREAM: Blocker = {
-  reason:
-    'the scenario needs the browser to be signed in, and no page in the estate can sign a browser ' +
-    'in. Doc 22 does not mark this row ⛔; its §8.1 says every scenario downstream of a session is ' +
-    'unrunnable, which this is.',
-  doc: '22 §8.1',
-}
-
 /* ------------------------------------------------------------------ the catalogue */
 
 const scenario = (
@@ -225,18 +230,18 @@ const S = 'S — the adversarial matrix'
 
 export const T3_SCENARIOS: readonly Scenario[] = [
   /* ---- group A */
-  scenario('BJ-ACC-01', A, 'Register from the sign-in surface and land back with a session', 'presentation', ['account', 'site', 'identity'], { gate: true, blocked: NO_SIGNIN }),
-  scenario('BJ-ACC-02', A, 'Register with a taken handle: inline error, other fields keep their values', 'presentation', ['account', 'identity'], { outcome: 'refusal', ownedBy: 'identity/src/server.test.ts', blocked: NO_SIGNIN }),
-  scenario('BJ-ACC-03', A, 'Sign in from a protected deep link and arrive at the deep link', 'navigation', ['account', 'identity', 'hub'], { gate: true, blocked: NO_SIGNIN }),
-  scenario('BJ-ACC-04', A, 'SSO handoff: Hub to Worlds with no second credential prompt', 'client-request', ['account', 'identity', 'worlds'], { gate: true, blocked: EXCHANGE_ROUTE }),
-  scenario('BJ-ACC-05', A, 'The handoff code is single-use: a replayed callback does not sign in', 'presentation', ['account', 'identity'], { outcome: 'refusal', ownedBy: 'identity/src/server.test.ts', blocked: EXCHANGE_ROUTE }),
-  scenario('BJ-ACC-09', A, 'Session expires mid-flow: the re-authentication path, no stale data left as current', 'presentation', ['identity', 'hub', 'hub-api'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-ACC-12', A, 'End one session from Security: the list reloads and that row is gone', 'presentation', ['identity', 'hub', 'hub-api'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-ACC-13', A, 'Sign out everywhere revokes the device performing it too', 'navigation', ['identity', 'hub', 'hub-api'], { blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-ACC-01', A, 'Register from the sign-in surface and land back with a session', 'presentation', ['account', 'site', 'identity'], { gate: true }),
+  scenario('BJ-ACC-02', A, 'Register with a taken handle: inline error, other fields keep their values', 'presentation', ['account', 'identity'], { outcome: 'refusal', ownedBy: 'identity/src/server.test.ts' }),
+  scenario('BJ-ACC-03', A, 'Sign in from a protected deep link and arrive at the deep link', 'navigation', ['account', 'identity', 'hub'], { gate: true }),
+  scenario('BJ-ACC-04', A, 'SSO handoff: Hub to Worlds with no second credential prompt', 'client-request', ['account', 'identity', 'worlds'], { gate: true }),
+  scenario('BJ-ACC-05', A, 'The handoff code is single-use: a replayed callback does not sign in', 'presentation', ['account', 'identity'], { outcome: 'refusal', ownedBy: 'identity/src/server.test.ts' }),
+  scenario('BJ-ACC-09', A, 'Session expires mid-flow: the re-authentication path, no stale data left as current', 'presentation', ['identity', 'hub', 'hub-api'], { gate: true }),
+  scenario('BJ-ACC-12', A, 'End one session from Security: the list reloads and that row is gone', 'presentation', ['identity', 'hub', 'hub-api'], {}),
+  scenario('BJ-ACC-13', A, 'Sign out everywhere revokes the device performing it too', 'navigation', ['identity', 'hub', 'hub-api'], {}),
   scenario('BJ-ACC-15', A, 'MFA lockout: the recovery-code path and the no-codes path', 'presentation', ['account', 'identity'], { outcome: 'refusal', ownedBy: 'identity/src/mfa.test.ts', blocked: NO_MFA_UI }),
 
   /* ---- group B */
-  scenario('BJ-WAL-01', B, 'Wallet page: one row per wallet, each matching the dashboard response', 'presentation', ['hub', 'hub-api', 'wallet', 'ledger'], { gate: true, blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-WAL-01', B, 'Wallet page: one row per wallet, each matching the dashboard response', 'presentation', ['hub', 'hub-api', 'wallet', 'ledger'], { gate: true }),
   scenario('BJ-WAL-08', B, 'Send: the destination confirmed is the destination submitted, fee shown first', 'client-request', ['hub', 'hub-api', 'wallet'], { blocked: NO_WALLET_WRITE }),
   scenario('BJ-WAL-12', B, 'Send: a policy deny is rendered as a reason, a limit and a route to raise it', 'presentation', ['hub', 'policy', 'wallet'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_WALLET_WRITE }),
   scenario('BJ-WAL-13', B, 'Send: a policy challenge prompts MFA inline and continues', 'presentation', ['hub', 'policy', 'identity'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_WALLET_WRITE }),
@@ -249,61 +254,61 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   scenario('BJ-WAL-22', B, 'An unverified external address is not offered as a withdrawal destination', 'presentation', ['hub', 'wallet'], { outcome: 'refusal', ownedBy: 'wallet/src/server.test.ts', blocked: NO_WALLET_WRITE }),
 
   /* ---- group C */
-  scenario('BJ-DSH-01', C, 'Hub overview with every upstream healthy: eleven tiles, total equals the sum', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing', 'wallet', 'activity', 'billing'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DSH-17', C, 'Activity feed: the second page is appended and the cursor passed back unparsed', 'client-request', ['hub', 'hub-api', 'activity'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DSH-20', C, 'Activity shows events from at least six different services', 'presentation', ['hub', 'hub-api', 'activity'], { blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-DSH-01', C, 'Hub overview with every upstream healthy: eleven tiles, total equals the sum', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing', 'wallet', 'activity', 'billing'], { gate: true }),
+  scenario('BJ-DSH-17', C, 'Activity feed: the second page is appended and the cursor passed back unparsed', 'client-request', ['hub', 'hub-api', 'activity'], { gate: true }),
+  scenario('BJ-DSH-20', C, 'Activity shows events from at least six different services', 'presentation', ['hub', 'hub-api', 'activity'], {}),
 
   /* ---- group D */
-  scenario('BJ-CRE-03', D, 'Launch: POST /v1/tokens lands on the order, in the state the response gave', 'navigation', ['create', 'mint', 'identity'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-CRE-04', D, 'Press Deploy: the page says accepted, never deployed', 'presentation', ['create', 'mint'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-CRE-05', D, 'The truth arrives by re-reading the order, not from the button’s response', 'presentation', ['create', 'mint', 'indexer'], { blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-CRE-03', D, 'Launch: POST /v1/tokens lands on the order, in the state the response gave', 'navigation', ['create', 'mint', 'identity'], { gate: true }),
+  scenario('BJ-CRE-04', D, 'Press Deploy: the page says accepted, never deployed', 'presentation', ['create', 'mint'], { gate: true }),
+  scenario('BJ-CRE-05', D, 'The truth arrives by re-reading the order, not from the button’s response', 'presentation', ['create', 'mint', 'indexer'], {}),
   scenario('BJ-CRE-10', D, 'The ten-step launch flow, each step reachable from the previous', 'navigation', ['create', 'mint', 'studio', 'market'], { blocked: NO_STUDIO_UI }),
 
   /* ---- group E */
-  scenario('BJ-MKT-03', E, 'Buy: the fee and royalty split are on screen before the button, and total matches', 'client-request', ['market', 'ledger'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-MKT-08', E, 'Two tabs, one listing, both press Buy: exactly one order, the loser sees the refusal', 'client-request', ['market', 'ledger'], { outcome: 'refusal', ownedBy: 'market/src/server.test.ts', blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-MKT-12', E, 'Raise a dispute: the two visible facts, and no invented status', 'presentation', ['market'], { blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-MKT-03', E, 'Buy: the fee and royalty split are on screen before the button, and total matches', 'client-request', ['market', 'ledger'], { gate: true }),
+  scenario('BJ-MKT-08', E, 'Two tabs, one listing, both press Buy: exactly one order, the loser sees the refusal', 'client-request', ['market', 'ledger'], { outcome: 'refusal', ownedBy: 'market/src/server.test.ts' }),
+  scenario('BJ-MKT-12', E, 'Raise a dispute: the two visible facts, and no invented status', 'presentation', ['market'], {}),
   scenario('BJ-MKT-18', E, 'Moderate a fraudulent listing: indicators as facts, never an editorial score', 'presentation', ['admin', 'admin-api', 'market'], { blocked: NO_CONSOLE_SCREEN('moderation') }),
 
   /* ---- group F */
-  scenario('BJ-TRD-02', F, 'Queue a backtest: the browser lands on the status page, which says it has not run', 'navigation', ['trade'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-TRD-03', F, 'The report replaces the status only when the run reports complete', 'presentation', ['trade'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-TRD-04', F, 'Another customer’s backtest id renders the not-found screen, not a permission error', 'navigation', ['trade'], { outcome: 'refusal', ownedBy: 'trade/src/server.test.ts', blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-TRD-06', F, 'Create a bot: it is a draft, and the page states nothing is reserved', 'presentation', ['trade'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-TRD-12', F, 'Fee settlements: one row per settlement, no duplicate settlement id', 'presentation', ['trade', 'billing'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-TRD-13', F, 'Another customer’s bot id renders the owner-scoped not-found screen', 'navigation', ['trade'], { outcome: 'refusal', ownedBy: 'trade/src/server.test.ts', blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-TRD-02', F, 'Queue a backtest: the browser lands on the status page, which says it has not run', 'navigation', ['trade'], { gate: true }),
+  scenario('BJ-TRD-03', F, 'The report replaces the status only when the run reports complete', 'presentation', ['trade'], {}),
+  scenario('BJ-TRD-04', F, 'Another customer’s backtest id renders the not-found screen, not a permission error', 'navigation', ['trade'], { outcome: 'refusal', ownedBy: 'trade/src/server.test.ts' }),
+  scenario('BJ-TRD-06', F, 'Create a bot: it is a draft, and the page states nothing is reserved', 'presentation', ['trade'], { gate: true }),
+  scenario('BJ-TRD-12', F, 'Fee settlements: one row per settlement, no duplicate settlement id', 'presentation', ['trade', 'billing'], {}),
+  scenario('BJ-TRD-13', F, 'Another customer’s bot id renders the owner-scoped not-found screen', 'navigation', ['trade'], { outcome: 'refusal', ownedBy: 'trade/src/server.test.ts' }),
 
   /* ---- group G */
-  scenario('BJ-WLD-05', G, 'An unsupported provision: the service’s own sentence, UNDELIVERABLE, no retry control', 'presentation', ['worlds'], { gate: true, outcome: 'refusal', ownedBy: 'worlds/src/server.test.ts', blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-WLD-05', G, 'An unsupported provision: the service’s own sentence, UNDELIVERABLE, no retry control', 'presentation', ['worlds'], { gate: true, outcome: 'refusal', ownedBy: 'worlds/src/server.test.ts' }),
   scenario('BJ-WLD-08', G, 'Join a world, complete an objective, see the reward in Hub and spend it in Market', 'presentation', ['worlds', 'hub-api', 'market', 'ledger'], { blocked: NO_WORLD_CLIENT }),
 
   /* ---- group H */
-  scenario('BJ-EMB-01', H, 'Play: the client posts an intent with an Idempotency-Key and animates the log', 'client-request', ['emberkin'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-EMB-11', H, 'Equip a cosmetic: the applied item changes no stat anywhere on the page', 'presentation', ['emberkin', 'billing'], { blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-EMB-01', H, 'Play: the client posts an intent with an Idempotency-Key and animates the log', 'client-request', ['emberkin'], { gate: true }),
+  scenario('BJ-EMB-11', H, 'Equip a cosmetic: the applied item changes no stat anywhere on the page', 'presentation', ['emberkin', 'billing'], {}),
 
   /* ---- group I */
-  scenario('BJ-AET-03', I, 'A write answers: the server’s settled stocks replace the projection immediately', 'presentation', ['aetherholm'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-AET-10', I, 'Found an alliance against a community that already exists; no create-community button', 'client-request', ['aetherholm', 'community'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-AET-11', I, 'The alliance directory lists the world with the caller’s membership marked', 'presentation', ['aetherholm'], { blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-AET-03', I, 'A write answers: the server’s settled stocks replace the projection immediately', 'presentation', ['aetherholm'], { gate: true }),
+  scenario('BJ-AET-10', I, 'Found an alliance against a community that already exists; no create-community button', 'client-request', ['aetherholm', 'community'], { gate: true }),
+  scenario('BJ-AET-11', I, 'The alliance directory lists the world with the caller’s membership marked', 'presentation', ['aetherholm'], {}),
 
   /* ---- group L */
-  scenario('BJ-DEV-03', L, 'Enrol an organisation: the screen does not mutate in order to read', 'client-request', ['developers', 'devplatform', 'identity'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DEV-04', L, 'Create a project: a member sees the refusal in words, not a 403 dump', 'presentation', ['developers', 'devplatform'], { outcome: 'refusal', ownedBy: 'devplatform/src/server.test.ts', blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DEV-08', L, 'Reload after the once-modal: the key is listed, the secret is not, no show-again', 'presentation', ['developers', 'devplatform'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DEV-09', L, 'Revoke a key: the row shows revoked and its usage history is retained', 'presentation', ['developers', 'devplatform'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DEV-10', L, 'Rotate a webhook secret: the once-modal again, under one idempotency key', 'client-request', ['developers', 'devplatform'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DEV-12', L, 'Register an endpoint, then read deliveries and retries with each outcome', 'presentation', ['developers', 'devplatform', 'notify'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DEV-13', L, 'Disable and delete a webhook endpoint; both take effect on reload', 'presentation', ['developers', 'devplatform'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DEV-14', L, 'Register an OAuth client: the secret goes through the once-modal, with a key', 'client-request', ['developers', 'devplatform'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-DEV-15', L, 'Quotas and usage render, and a quota raise is not offered', 'presentation', ['developers', 'devplatform'], { outcome: 'refusal', ownedBy: 'devplatform/src/server.test.ts', blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-DEV-03', L, 'Enrol an organisation: the screen does not mutate in order to read', 'client-request', ['developers', 'devplatform', 'identity'], {}),
+  scenario('BJ-DEV-04', L, 'Create a project: a member sees the refusal in words, not a 403 dump', 'presentation', ['developers', 'devplatform'], { outcome: 'refusal', ownedBy: 'devplatform/src/server.test.ts' }),
+  scenario('BJ-DEV-08', L, 'Reload after the once-modal: the key is listed, the secret is not, no show-again', 'presentation', ['developers', 'devplatform'], {}),
+  scenario('BJ-DEV-09', L, 'Revoke a key: the row shows revoked and its usage history is retained', 'presentation', ['developers', 'devplatform'], {}),
+  scenario('BJ-DEV-10', L, 'Rotate a webhook secret: the once-modal again, under one idempotency key', 'client-request', ['developers', 'devplatform'], { gate: true }),
+  scenario('BJ-DEV-12', L, 'Register an endpoint, then read deliveries and retries with each outcome', 'presentation', ['developers', 'devplatform', 'notify'], {}),
+  scenario('BJ-DEV-13', L, 'Disable and delete a webhook endpoint; both take effect on reload', 'presentation', ['developers', 'devplatform'], {}),
+  scenario('BJ-DEV-14', L, 'Register an OAuth client: the secret goes through the once-modal, with a key', 'client-request', ['developers', 'devplatform'], { gate: true }),
+  scenario('BJ-DEV-15', L, 'Quotas and usage render, and a quota raise is not offered', 'presentation', ['developers', 'devplatform'], { outcome: 'refusal', ownedBy: 'devplatform/src/server.test.ts' }),
   scenario('BJ-DEV-17', L, 'The sandbox leg: resettable state and testnet wallets from public docs alone', 'client-request', ['developers', 'devplatform'], { blocked: NO_SANDBOX_UI }),
 
   /* ---- group M */
-  scenario('BJ-ADM-09', M, 'The approvals queue under each filter produces the rows the response contains', 'presentation', ['admin', 'admin-api'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-ADM-10', M, 'The action catalogue renders the blocked action and its reason', 'presentation', ['admin', 'admin-api'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-ADM-14', M, 'One correlation id returns every audit event across the services, with no free-text box', 'presentation', ['admin', 'admin-api'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-ADM-16', M, 'Lower an engagement policy: the write takes effect and names the approval', 'client-request', ['admin', 'admin-api', 'ledger'], { blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-ADM-19', M, 'Set a feature flag: the form refuses locally with the same rules the service does', 'client-request', ['admin', 'admin-api'], { outcome: 'refusal', ownedBy: 'admin-api/src/server.test.ts', blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-ADM-09', M, 'The approvals queue under each filter produces the rows the response contains', 'presentation', ['admin', 'admin-api'], {}),
+  scenario('BJ-ADM-10', M, 'The action catalogue renders the blocked action and its reason', 'presentation', ['admin', 'admin-api'], { gate: true }),
+  scenario('BJ-ADM-14', M, 'One correlation id returns every audit event across the services, with no free-text box', 'presentation', ['admin', 'admin-api'], { gate: true }),
+  scenario('BJ-ADM-16', M, 'Lower an engagement policy: the write takes effect and names the approval', 'client-request', ['admin', 'admin-api', 'ledger'], {}),
+  scenario('BJ-ADM-19', M, 'Set a feature flag: the form refuses locally with the same rules the service does', 'client-request', ['admin', 'admin-api'], { outcome: 'refusal', ownedBy: 'admin-api/src/server.test.ts' }),
   scenario('BJ-ADM-21', M, 'A stuck withdrawal: filter by state, sort by age, bump-fee or abandon with dual approval', 'client-request', ['admin', 'admin-api', 'wallet'], { blocked: NO_CONSOLE_SCREEN('withdrawals') }),
   scenario('BJ-ADM-22', M, 'A reconciliation drift alert freezes one asset and one operator cannot override it', 'presentation', ['admin', 'admin-api', 'ledger'], { outcome: 'refusal', ownedBy: 'ledger/src/reconcile.test.ts', blocked: NO_CONSOLE_SCREEN('reconciliation') }),
   scenario('BJ-ADM-23', M, 'A support agent answers a balance question from the console alone, with an audit record', 'client-request', ['admin', 'admin-api'], { blocked: NO_CONSOLE_SCREEN('support-lookup') }),
@@ -325,21 +330,21 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   scenario('BJ-COM-07', Q, 'An alliance is bound to a community created elsewhere (see BJ-AET-10)', 'client-request', ['aetherholm', 'community'], { blocked: NO_COMMUNITY_UI }),
 
   /* ---- group R */
-  scenario('BJ-XS-01', R, 'One account signs into everything, once: Hub → Worlds → Market, no second prompt', 'presentation', ['account', 'identity', 'hub', 'hub-api', 'worlds', 'market'], { gate: true, blocked: NO_SIGNIN }),
+  scenario('BJ-XS-01', R, 'One account signs into everything, once: Hub → Worlds → Market, no second prompt', 'presentation', ['account', 'identity', 'hub', 'hub-api', 'worlds', 'market'], { gate: true }),
   scenario('BJ-XS-02', R, 'The profile created at registration renders in Market, Worlds and Community', 'presentation', ['account', 'identity', 'market', 'worlds', 'community'], { blocked: NO_COMMUNITY_UI }),
   scenario('BJ-XS-03', R, 'The wallet is the same screen at the same address from Worlds, Trade and Create', 'navigation', ['hub', 'worlds', 'trade', 'create'], { blocked: NO_WALLET_WRITE }),
-  scenario('BJ-XS-04', R, 'The total on Hub overview and on Hub portfolio are equal and share a pricedAt', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-XS-05', R, 'Act in three products, then see all three in one feed with six originating services', 'presentation', ['hub', 'hub-api', 'activity'], { gate: true, blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-XS-04', R, 'The total on Hub overview and on Hub portfolio are equal and share a pricedAt', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing'], { gate: true }),
+  scenario('BJ-XS-05', R, 'Act in three products, then see all three in one feed with six originating services', 'presentation', ['hub', 'hub-api', 'activity'], { gate: true }),
   scenario('BJ-XS-06', R, 'Earn a reward in a world, spend it in Market, see both legs on one timeline', 'presentation', ['worlds', 'market', 'hub-api', 'activity'], { blocked: NO_WORLD_CLIENT }),
   scenario('BJ-XS-07', R, 'A Studio brand kit becomes game content and a Market listing under one asset id', 'presentation', ['studio', 'worlds', 'market'], { blocked: NO_STUDIO_UI }),
   scenario('BJ-XS-08', R, 'Changing a notification preference on one surface changes what is delivered', 'client-request', ['notify'], { blocked: NO_NOTIFY_UI }),
   scenario('BJ-XS-09', R, 'Answer a balance question from admin-web alone (see BJ-ADM-23)', 'presentation', ['admin', 'admin-api'], { blocked: NO_CONSOLE_SCREEN('support-lookup') }),
   scenario('BJ-XS-10', R, 'Every entry in the rendered switcher opens a surface that answers 200 on its index', 'navigation', ['site', 'hub', 'market', 'trade', 'worlds', 'create', 'explorer', 'developers', 'status'], { gate: true }),
-  scenario('BJ-XS-13', R, 'A transaction link from a wallet row and from an order both land on the explorer', 'navigation', ['hub', 'market', 'explorer', 'indexer'], { gate: true, blocked: SESSION_DOWNSTREAM }),
-  scenario('BJ-XS-14', R, 'A Worlds title page links to its Market listings and back', 'navigation', ['worlds', 'market'], { blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-XS-13', R, 'A transaction link from a wallet row and from an order both land on the explorer', 'navigation', ['hub', 'market', 'explorer', 'indexer'], { gate: true }),
+  scenario('BJ-XS-14', R, 'A Worlds title page links to its Market listings and back', 'navigation', ['worlds', 'market'], {}),
 
   /* ---- group S — the one hazard the matrix puts at T3 */
-  scenario('BJ-ADV-01-H5', S, 'Buy with the session expiring mid-flow: re-auth path, no stale data as current', 'presentation', ['market', 'identity'], { gate: true, blocked: SESSION_DOWNSTREAM }),
+  scenario('BJ-ADV-01-H5', S, 'Buy with the session expiring mid-flow: re-auth path, no stale data as current', 'presentation', ['market', 'identity'], { gate: true }),
 ]
 
 /**

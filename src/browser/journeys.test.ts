@@ -27,6 +27,7 @@ import {
   IMPLEMENTED_IDS,
   SURFACE_KEYS,
   browserJourneys,
+  join,
   surfaceJourney,
   undeclared,
   unimplemented,
@@ -43,7 +44,7 @@ const OFF: BrowserConfig = { enabled: false, executablePath: '', timeoutMs: 5_00
 
 /* ------------------------------------------------------------------ the declaration */
 
-test('NOTHING is declared when no surface has an address, which is every deployment today', () => {
+test('NOTHING is declared when no surface has an address', () => {
   const declared = browserJourneys({ config: CONFIG, targets: new Set(['identity', 'market', 'ledger']) })
   assert.deepEqual(declared, [], 'a service address is not a surface address')
 })
@@ -62,6 +63,9 @@ test('a scenario declares itself the moment every surface it needs is addressabl
   assert.ok(scenario)
   const declared = browserJourneys({ config: CONFIG, targets: new Set(scenario.needs) })
   assert.equal(declared.length, 1)
+  // A gate scenario is a CRITICAL journey. Doc 22 marks BJ-XS-10 with a star, and a starred
+  // scenario that declared itself non-critical would be a release criterion the gate ignores.
+  assert.equal(declared[0]?.critical, true)
   assert.equal(declared[0]?.name, 'browser.bj-xs-10')
   // Its own deadline, not the global one: launching Chromium and waiting for a SPA to mount is
   // not comparable to a JSON round trip.
@@ -97,10 +101,47 @@ test('every implemented id is a real, unblocked catalogue scenario', () => {
 })
 
 test('the unimplemented gap is stated rather than silent', () => {
-  const missing = unimplemented().map((s) => s.id).sort()
-  // Named, so that adding one is a visible change to this list. An absent scenario is a gap
-  // nobody can see; a listed one is a gap somebody can close.
-  assert.deepEqual(missing, ['BJ-NET-09', 'BJ-NET-14', 'BJ-NET-18', 'BJ-NET-20', 'BJ-NET-21'])
+  const missing = unimplemented().map((s) => s.id)
+  // Fifty-two, not five: three blockers were removed after being disproved in a browser, which
+  // moved forty-four scenarios from "cannot be written" to "not written yet". That is a bigger
+  // stated gap and a smaller real one, and both halves are the point.
+  //
+  // Pinned by SHAPE rather than by full list. The whole list would be a fifty-two-line literal
+  // that nobody re-reads, and the property worth guarding is not its contents: it is that
+  // implemented and unimplemented partition the unblocked set exactly, with no scenario in both
+  // and none in neither.
+  const unblockedIds = T3_SCENARIOS.filter((s) => s.blocked === null).map((s) => s.id)
+  assert.equal(missing.length + IMPLEMENTED_IDS.length, unblockedIds.length)
+  for (const id of IMPLEMENTED_IDS) {
+    assert.ok(!missing.includes(id), `${id} is implemented AND reported as a gap`)
+  }
+  for (const id of unblockedIds) {
+    assert.ok(
+      missing.includes(id) || IMPLEMENTED_IDS.includes(id),
+      `${id} is unblocked and is in neither the implemented set nor the stated gap`,
+    )
+  }
+  // The four scenarios closest to being written are named, because a shape check alone would pass
+  // against a file that had quietly lost one.
+  for (const id of ['BJ-NET-09', 'BJ-NET-14', 'BJ-XS-01', 'BJ-DSH-01']) {
+    assert.ok(missing.includes(id), `${id} should still be a stated gap`)
+  }
+})
+
+test('THE FOUR IMPLEMENTED SCENARIOS ARE THE FOUR THAT WERE DRIVEN', () => {
+  // Every one of these was run in Chromium against the estate before it was added, and passes
+  // there. A scenario in this list that has never been driven is the thing the whole file argues
+  // against: a declared journey that has not demonstrated it can be green.
+  assert.deepEqual([...IMPLEMENTED_IDS].sort(), ['BJ-ACC-01', 'BJ-ACC-02', 'BJ-ACC-03', 'BJ-XS-10'])
+})
+
+test('join() does not produce //register or accountregister', () => {
+  // `account` resolves to `hub.<apex>/account` - a path under another surface - so this is
+  // load-bearing rather than tidiness. One of the two wrong answers is a 404 that reads as a
+  // missing route.
+  assert.equal(join('https://hub.test/account', 'register'), 'https://hub.test/account/register')
+  assert.equal(join('https://hub.test/account/', '/register'), 'https://hub.test/account/register')
+  assert.equal(join('https://hub.test', ''), 'https://hub.test')
 })
 
 test('the surface keys are keys only — no hostname, port or apex leaks into this repository', () => {

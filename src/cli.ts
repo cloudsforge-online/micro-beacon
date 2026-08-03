@@ -32,11 +32,16 @@
  * is exactly the shape of dependency that ends with CI holding production credentials.
  */
 
-import { argv, exit, stderr, stdout } from 'node:process'
+import process, { argv, exit, stderr, stdout } from 'node:process'
 import type { Sql } from '@cloudsforge/db'
 import type { GateDecision } from './gate.ts'
 
-const USAGE = `beacon gate --release <tag> [--url <base>] [--token <token>] [--json] [--record]
+const USAGE = `beacon <command>
+
+  gate      ask the release gate, as an exit code
+  browser   drive the declared tier-3 browser journeys against a running estate
+
+beacon gate --release <tag> [--url <base>] [--token <token>] [--json] [--record]
 
   --release   the release candidate being considered. Required.
   --url       Beacon's base URL. Omit to evaluate directly against the database.
@@ -46,6 +51,18 @@ const USAGE = `beacon gate --release <tag> [--url <base>] [--token <token>] [--j
   --json      print the decision as JSON rather than as prose.
 
 exit codes: 0 promote · 1 refuse · 2 could not ask
+
+beacon browser [--targets <name=url,...>] [--browser <path>] [--insecure-tls] [--timeout <ms>]
+
+  --targets       the estate's addresses. Defaults to BEACON_TARGETS.
+  --browser       a Chromium executable. Defaults to BEACON_BROWSER_EXECUTABLE, then to the one
+                  playwright-core would use.
+  --insecure-tls  accept the certificate the gateway serves. Needed for a dev estate terminating
+                  on Traefik's self-signed default; NEVER for a real one.
+  --timeout       per-operation timeout in ms. Default 30000.
+
+exit codes: 0 every declared journey passed · 1 one failed, errored or SKIPPED · 2 nothing
+was declared, or the arguments were wrong
 `
 
 interface Args {
@@ -170,8 +187,165 @@ async function viaDatabase(args: Args): Promise<GateDecision> {
   }
 }
 
+
+/* ------------------------------------------------------------------ beacon browser */
+
+interface BrowserArgs {
+  readonly targets: string
+  readonly executablePath: string
+  readonly insecureTls: boolean
+  readonly timeoutMs: number
+}
+
+export function parseBrowserArgs(
+  args: readonly string[],
+  source: Record<string, string | undefined>,
+): BrowserArgs | null {
+  let targets = source['BEACON_TARGETS'] ?? ''
+  let executablePath = source['BEACON_BROWSER_EXECUTABLE'] ?? ''
+  let insecureTls = false
+  let timeoutMs = 30_000
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '--insecure-tls') insecureTls = true
+    else if (arg === '--targets') targets = args[++i] ?? ''
+    else if (arg === '--browser') executablePath = args[++i] ?? ''
+    else if (arg === '--timeout') timeoutMs = Number(args[++i] ?? '')
+    else if (arg?.startsWith('--targets=')) targets = arg.slice('--targets='.length)
+    else if (arg?.startsWith('--browser=')) executablePath = arg.slice('--browser='.length)
+    else if (arg?.startsWith('--timeout=')) timeoutMs = Number(arg.slice('--timeout='.length))
+    else return null
+  }
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000) return null
+  return { targets, executablePath, insecureTls, timeoutMs }
+}
+
+/**
+ * `beacon browser` - the tier-3 browser journeys, against a running estate, without a database.
+ *
+ * ==============================================================================================
+ * **A SKIP IS NOT A PASS HERE EITHER, AND THAT IS WHY THIS EXITS 1 ON ONE.**
+ *
+ * `journeys.ts` rule 2 - "not-run is not passed" - is the whole reason this command is worth
+ * having: the failure mode of a browser suite is not a red test, it is a suite that quietly
+ * skipped because there was no Chromium and reported nothing. So a skip is an exit 1, alongside a
+ * fail, and the reason is printed. Somebody who genuinely does not want the browser tier does not
+ * run this command; they do not get a green from it.
+ *
+ * **AND DECLARING NOTHING IS EXIT 2, NOT EXIT 0.** "Zero journeys, zero failures" is arithmetically
+ * green and means the estate was never looked at. `undeclared()` is printed with it, because
+ * "0 browser journeys" reads as an oversight while "BJ-XS-10: no address for site, hub, ..." reads
+ * as the one configuration change that turns it on.
+ * ==============================================================================================
+ *
+ * Nothing is written anywhere. This is the command a developer and a deploy script run; recording
+ * runs into `journey_runs` is the SERVICE's job, on a lease, and a CLI that wrote there would put
+ * a manual run into a series the gate reads - which `latestRuns` excludes for exactly that reason.
+ */
+export async function runBrowser(args: BrowserArgs): Promise<0 | 1 | 2> {
+  // Imported HERE rather than at the top of the file, for the reason the module docstring gives
+  // about `env.ts`: this command must not require a database credential to make an HTTP request.
+  const { parseTargets, TargetsError } = await import('./targets.ts')
+  const { browserJourneys, undeclared } = await import('./browser/journeys.ts')
+  const { runJourney } = await import('./journeys.ts')
+
+  let targets: ReadonlyMap<string, string>
+  try {
+    targets = parseTargets(args.targets)
+  } catch (err) {
+    stderr.write(
+      `${err instanceof TargetsError ? err.message : String(err)}\n` +
+        'Set BEACON_TARGETS, or pass --targets name=url,name=url\n',
+    )
+    return 2
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────────────────────
+  // THE FLAG HAS TO REACH `fetch` TOO, AND THE FIRST VERSION OF THIS DID NOT.
+  //
+  // A browser journey makes TWO kinds of request: the browser's, and its own — BJ-XS-10 fetches
+  // each address the switcher offers, and BJ-ACC-02 seeds an account over HTTP. Telling Chromium
+  // to accept the gateway's self-signed certificate and leaving Node's fetch strict produced
+  // exactly the shape of failure this repository keeps finding: three of four journeys red with
+  // `TypeError: fetch failed`, which names neither TLS nor the certificate and reads as the estate
+  // being down. BJ-XS-10 got as far as reporting that `create.<apex>` does not answer. It does.
+  //
+  // Process-wide, and only inside this command, which is a short-lived CLI that does nothing else.
+  // The SERVICE never takes this path: `runBrowser` is not reachable from `index.ts`.
+  // ────────────────────────────────────────────────────────────────────────────────────────────
+  if (args.insecureTls) process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0'
+
+  const config = {
+    enabled: true,
+    executablePath: args.executablePath,
+    timeoutMs: args.timeoutMs,
+    ignoreHttpsErrors: args.insecureTls,
+  }
+  const registry = { config, targets: new Set(targets.keys()) }
+  const declared = browserJourneys(registry)
+
+  if (declared.length === 0) {
+    stderr.write('no browser journey declared itself against these addresses.\n')
+    for (const line of undeclared(registry)) stderr.write(`  ${line}\n`)
+    return 2
+  }
+
+  stdout.write(
+    `${declared.length} browser journey(s) declared against ${targets.size} address(es)\n\n`,
+  )
+  let bad = 0
+  for (const definition of declared) {
+    const run = await runJourney(definition, { targets, trigger: 'manual' })
+    // FAIL and ERROR are printed apart, because rule 1 of `journeys.ts` says they are different
+    // outcomes and go to different people: a failed assertion is the PRODUCT broken, anything else
+    // thrown is BEACON broken. Collapsing them is how somebody spends an evening debugging a
+    // service that was fine - which is not hypothetical here, since a `page.goto` timing out on
+    // this machine's loopback port-forward surfaces as `error`, correctly.
+    const mark =
+      run.status === 'pass'
+        ? 'pass'
+        : run.status === 'skip'
+          ? 'SKIP'
+          : run.status === 'fail'
+            ? 'FAIL'
+            : 'ERROR'
+    stdout.write(
+      `  ${mark}  ${definition.name}  ${Math.round(run.durationMs)}ms  ${definition.title}\n`,
+    )
+    for (const step of run.steps) {
+      const glyph = step.status === 'pass' ? '·' : 'x'
+      stdout.write(`        ${glyph} ${step.name}${step.error ? ` - ${step.error}` : ''}\n`)
+    }
+    if (run.status !== 'pass') {
+      bad++
+      stdout.write(`        ${run.status}: ${run.error ?? 'no reason given'}\n`)
+    }
+  }
+
+  // The gap, after the result: the run's verdict is the last thing on the screen and the gap is
+  // the thing you scroll up to.
+  const gaps = undeclared(registry)
+  if (gaps.length > 0) {
+    stdout.write(`\n${gaps.length} unblocked scenario(s) still undeclared:\n`)
+    for (const line of gaps) stdout.write(`  ${line}\n`)
+  }
+  stdout.write(`\n${declared.length - bad}/${declared.length} passed\n`)
+  return bad === 0 ? 0 : 1
+}
+
 export async function main(argsIn: readonly string[]): Promise<0 | 1 | 2> {
   const [command, ...rest] = argsIn
+
+  if (command === 'browser') {
+    const browserArgs = parseBrowserArgs(rest, process.env)
+    if (!browserArgs) {
+      stderr.write(USAGE)
+      return 2
+    }
+    return runBrowser(browserArgs)
+  }
+
   if (command !== 'gate') {
     stderr.write(USAGE)
     return 2

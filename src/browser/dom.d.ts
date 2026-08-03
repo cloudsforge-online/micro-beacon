@@ -21,8 +21,24 @@
 declare const document: {
   readonly body: { readonly innerText: string } | null | undefined
   querySelectorAll(selectors: string): ArrayLike<unknown> & Iterable<unknown>
+  querySelector(selectors: string): unknown | null
 }
 
 interface HTMLAnchorElement {
   readonly href: string
+}
+
+/** BJ-ACC-02 reads the values three inputs kept after a refusal. */
+interface HTMLInputElement {
+  readonly value: string
+}
+
+/** BJ-XS-10 clicks the switcher's trigger, because its entries do not exist until it is open. */
+interface HTMLButtonElement {
+  click(): void
+}
+
+/** BJ-ACC-02 reads the refusal banner's text. `innerText`, so hidden nodes do not count. */
+interface HTMLElement {
+  readonly innerText: string
 }

@@ -93,14 +93,42 @@ test('a blocked scenario cites the section of doc 22 that records the blocker', 
   }
 })
 
-test('the six scenarios that need no session are the six that are unblocked', () => {
-  // Pinned as a list rather than a count. Doc 22 §8.7 says no T3 scenario can run until a compose
-  // profile serves the bundles; these six are the ones that need NOTHING ELSE, so they are what
-  // closing §8.7 buys. A change to this list is a change to that claim and should be reviewed as
-  // one.
+test('THE UNBLOCKED SET IS PINNED, BECAUSE REMOVING A BLOCKER IS A CLAIM ABOUT THE ESTATE', () => {
+  // This list was six. It is fifty-six, because three blockers were removed after being disproved
+  // in Chromium against the running estate — see the note above `NO_WALLET_WRITE` in catalogue.ts
+  // for what was driven. Pinned as a LIST rather than a count so that removing a fourth blocker is
+  // a reviewable change to this file and not a number quietly going up.
+  //
+  // Unblocked is NOT runnable. It means "can be written"; `journeys.ts` decides what is declared,
+  // and `unimplemented()` names every one of these that is not.
+  assert.deepEqual(unblocked().map((s) => s.id).sort(), [
+    'BJ-ACC-01', 'BJ-ACC-02', 'BJ-ACC-03', 'BJ-ACC-04', 'BJ-ACC-05', 'BJ-ACC-09',
+    'BJ-ACC-12', 'BJ-ACC-13', 'BJ-ADM-09', 'BJ-ADM-10', 'BJ-ADM-14', 'BJ-ADM-16',
+    'BJ-ADM-19', 'BJ-ADV-01-H5', 'BJ-AET-03', 'BJ-AET-10', 'BJ-AET-11', 'BJ-CRE-03',
+    'BJ-CRE-04', 'BJ-CRE-05', 'BJ-DEV-03', 'BJ-DEV-04', 'BJ-DEV-08', 'BJ-DEV-09',
+    'BJ-DEV-10', 'BJ-DEV-12', 'BJ-DEV-13', 'BJ-DEV-14', 'BJ-DEV-15', 'BJ-DSH-01',
+    'BJ-DSH-17', 'BJ-DSH-20', 'BJ-EMB-01', 'BJ-EMB-11', 'BJ-MKT-03', 'BJ-MKT-08',
+    'BJ-MKT-12', 'BJ-NET-09', 'BJ-NET-14', 'BJ-NET-18', 'BJ-NET-20', 'BJ-NET-21',
+    'BJ-TRD-02', 'BJ-TRD-03', 'BJ-TRD-04', 'BJ-TRD-06', 'BJ-TRD-12', 'BJ-TRD-13',
+    'BJ-WAL-01', 'BJ-WLD-05', 'BJ-XS-01', 'BJ-XS-04', 'BJ-XS-05', 'BJ-XS-10',
+    'BJ-XS-13', 'BJ-XS-14',
+  ].sort())
+})
+
+test('THE SIGN-IN BLOCKER IS GONE FROM EVERY ROW, NOT JUST FROM THE ONES SOMEBODY REMEMBERED', () => {
+  // The failure this guards is the one the estate keeps repeating: a claim corrected in one place
+  // and left standing in nineteen others. `NO_SIGNIN`, `EXCHANGE_ROUTE` and `SESSION_DOWNSTREAM`
+  // between them blocked forty-four rows, and every one of those rows had to move.
+  const stale = T3_SCENARIOS.filter(
+    (s) =>
+      s.blocked !== null &&
+      (/sign a browser in|serves a sign-in page|auth\/exchange/.test(s.blocked.reason) ||
+        s.blocked.doc === '22 §8.1'),
+  )
   assert.deepEqual(
-    unblocked().map((s) => s.id).sort(),
-    ['BJ-NET-09', 'BJ-NET-14', 'BJ-NET-18', 'BJ-NET-20', 'BJ-NET-21', 'BJ-XS-10'],
+    stale.map((s) => s.id),
+    [],
+    'these rows still cite a sign-in blocker that was disproved by driving it in a browser',
   )
 })
 
@@ -114,7 +142,10 @@ test('the blocked majority is accounted for, section by section', () => {
   for (const [doc, list] of byDoc) {
     assert.ok(list.length > 0, `${doc} blocks nothing`)
   }
-  assert.ok(byDoc.has('22 §8.1'), 'the sign-in surface is the largest blocker and must be present')
+  // §8.1 is deliberately ABSENT now. It was the largest blocker in the catalogue — the sign-in
+  // surface — and it is closed: hub-web serves the page, and BJ-ACC-01 drives it. Asserted as an
+  // absence rather than deleted, so that a blocker re-appearing there is a visible change.
+  assert.equal(byDoc.has('22 §8.1'), false, 'the sign-in blocker is closed and must not return quietly')
   assert.ok(byDoc.has('22 §8.2'), 'the missing wallet write surface must be present')
 })
 

@@ -29,6 +29,7 @@
  */
 
 import { hostname } from 'node:os'
+import { TargetsError, parseTargets as parseTargetsPure } from './targets.ts'
 
 /**
  * The service's own name. A constant rather than a variable: it is a property of the repository,
@@ -102,29 +103,19 @@ function boolean(source: Source, name: string, fallback: boolean): boolean {
 }
 
 /**
- * `name=url,name=url` — the estate's addresses, as one variable.
+ * `name=url,name=url` — the estate's addresses.
  *
- * Parsed strictly rather than leniently. A typo that silently produced a target named
- * `"pay=http://pay:4003"` would probe nothing and report green, and a monitor that reports green
- * because it was misconfigured is worse than no monitor: it is a monitor that has been believed.
+ * The parser itself lives in `./targets.ts`, which has no side effects, so `beacon browser` can
+ * read the same variable without importing this module and therefore without demanding a database
+ * credential. Re-raised as an `EnvError` here so every caller of `loadEnv` still sees one type.
  */
 export function parseTargets(raw: string): ReadonlyMap<string, string> {
-  const out = new Map<string, string>()
-  for (const pair of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
-    const eq = pair.indexOf('=')
-    if (eq <= 0) throw new EnvError(`BEACON_TARGETS entry "${pair}" is not name=url`)
-    const name = pair.slice(0, eq).trim()
-    const url = pair.slice(eq + 1).trim()
-    if (!/^[a-z][a-z0-9-]*$/.test(name)) {
-      throw new EnvError(`BEACON_TARGETS name "${name}" must be lowercase kebab-case`)
-    }
-    if (!/^https?:\/\/[^\s]+$/.test(url)) {
-      throw new EnvError(`BEACON_TARGETS url for "${name}" must be an http(s) URL (got "${url}")`)
-    }
-    if (out.has(name)) throw new EnvError(`BEACON_TARGETS names "${name}" twice`)
-    out.set(name, url.replace(/\/+$/, ''))
+  try {
+    return parseTargetsPure(raw)
+  } catch (err) {
+    if (err instanceof TargetsError) throw new EnvError(err.message)
+    throw err
   }
-  return out
 }
 
 export interface Env {

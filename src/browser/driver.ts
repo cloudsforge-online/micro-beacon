@@ -58,6 +58,12 @@ export interface BrowserPage {
   setDefaultTimeout(ms: number): void
   on(event: string, handler: (arg: never) => void): void
   url(): string
+  /* The four a journey that DRIVES a form needs. Structural, for the same reason as the rest of
+   * this block: `playwright-core` is optional and importing its types would make it mandatory. */
+  fill(selector: string, value: string, options?: { timeout?: number }): Promise<void>
+  click(selector: string, options?: { timeout?: number }): Promise<void>
+  waitForURL(predicate: (url: URL) => boolean, options?: { timeout?: number }): Promise<void>
+  waitForTimeout(ms: number): Promise<void>
 }
 
 interface Chromium {
