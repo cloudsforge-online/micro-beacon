@@ -67,6 +67,7 @@
 import { accessToken, call, field, pollFor, registerThrowaway, stringField, type Json } from './calls.ts'
 import { GROUPS } from './groups.ts'
 import type { JourneyContext, JourneyDefinition } from './journeys.ts'
+import type { LiveScope } from '@cloudsforge/contracts-auth'
 
 /* ------------------------------------------------------------------ shared shapes */
 
@@ -560,7 +561,32 @@ export const ECOSYSTEM_TRIAL_BALANCE: JourneyDefinition = {
         // The credential goes in the Authorization header; identity shape-checks the prefix
         // before touching the database.
         token: credential as string,
-        body: { scopes: ['ledger:read'] },
+        // ── THIS ARRAY IS BEACON'S ENTIRE OUTBOUND SCOPE DECLARATION ──────────────────────────
+        //
+        // `satisfies readonly LiveScope[]` rather than a named constant, and the literal stays
+        // exactly here, inline, on purpose. Both halves of that are load-bearing.
+        //
+        // The `satisfies` is the check. This is an outbound demand — what beacon presents to
+        // identity — and that direction had never been verified by anything: `service-ci.yml`'s
+        // scope audit reads a repository's INBOUND route gates. That is how `micro-market` came
+        // to declare `policy:evaluate` and `micro-wallet` `custody:address`, neither ever a
+        // registry key, for the life of both services. `LiveScope` rather than `Scope` because
+        // `Scope` is every registered key including DEPRECATED ones, and identity will not mint
+        // a deprecated scope either — it fail-fasts on its grant list at import, so a bad name
+        // here is a dead identity container and no tokens for anybody.
+        //
+        // The literal stays inline because `micro-deploy` reads it FROM THIS TEXT.
+        // `derive-grants.mjs` has two seams: an exported `*_SCOPES` constant, and the `scopes:`
+        // body of a `POST /service-tokens/exchange` call. Beacon is only ever seen through the
+        // second — it builds no `HttpClient`, so `presentsCredential()` is false for this file,
+        // and it has no entry in `compose/estate/grant-gaps.json` precisely because this literal
+        // is readable (`deploy/scripts/derive-grants.mjs:414-421`). Lifting it to
+        // `scopes: LEDGER_SCOPES` would match neither seam: the file would contribute nothing,
+        // beacon would silently lose `ledger:read`, and the estate build would fail it as an
+        // undeclared gap. A named constant needs micro-deploy to resolve an identifier at this
+        // seam first. Until then, `satisfies` buys the whole compile-time guarantee a constant
+        // would have, and costs the estate nothing.
+        body: { scopes: ['ledger:read'] satisfies readonly LiveScope[] },
       })
       ctx.assert(
         result.status === 201 || result.status === 200,
