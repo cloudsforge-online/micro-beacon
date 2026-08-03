@@ -333,14 +333,16 @@ in this repository, and tiers 1 and 2 beside their bundles. The catalogue is `ca
 scenario becomes a journey only when it carries no permanent blocker, every surface it needs has an
 address, and an implementation exists.
 
-**Today that is the empty set, and that is the correct answer.**
-`deploy/compose/docker-compose.estate.yml` serves no frontend container (doc 22 §8.7), so there is
-nowhere to point a tab. Eighty of the eighty-six carry a deeper blocker as well — chiefly that
-nothing in the estate serves a sign-in page, so a browser cannot establish a session. Six need
-nothing but an address: `BJ-NET-09`, `BJ-NET-14`, `BJ-NET-18`, `BJ-NET-20`, `BJ-NET-21` and
-`BJ-XS-10`, of which `BJ-XS-10` is implemented. `index.ts` logs the reason per scenario at boot,
-because "0 browser journeys" reads as an oversight and "no address for site, hub, …" reads as a
-deploy change.
+**This paragraph used to say the answer was the empty set, and it no longer is.** It was empty
+because `deploy/compose/docker-compose.estate.yml` served no frontend container (doc 22 §8.7) and
+nothing served a sign-in page. Both premises are now false — the estate serves sixteen bundles
+behind the gateway and `hub-web` serves the sign-in surface — so four scenarios declare themselves
+whenever `BEACON_TARGETS` names the surfaces they need, with no code change to make it happen,
+which is the whole point of computing the declaration. `BJ-ACC-01`, `BJ-ACC-02`, `BJ-ACC-03` and
+`BJ-XS-10` are implemented; thirty-one of the eighty-seven remain blocked on a screen that does not
+exist, and the rest are named one line at a time by `unimplemented()` rather than quietly omitted.
+`index.ts` logs the reason per scenario at boot, because "0 browser journeys" reads as an oversight
+and "no address for site, hub, …" reads as a deploy change.
 
 The harness itself is proved, with and without a browser. `assertRendered` and `assertClean` are
 pure functions checked in every run; against a real Chromium, a page whose bundle 404s is required
@@ -350,6 +352,54 @@ to go **red** while its shell answers 200 — which is the entire argument for a
 Every route a journey calls was read out of the service that serves it, never out of a document.
 Method and path rather than line numbers, for the reason `src/estate.ts`'s header sets out at
 length.
+
+### 7.1 The smoke tier — `pnpm smoke`
+
+```
+beacon smoke [--apex <host>] [--surface <key>] [--browser <path>] [--timeout <ms>]
+```
+
+Signs in for real, then loads all sixteen surfaces in one Chromium session, through the gateway.
+
+**It intercepts nothing.** Every byte those pages receive came from the estate. That sentence is
+the whole product, because the reason it exists is that the estate shipped completely unusable and
+completely green: every frontend's browser suite did
+
+```js
+await page.route('**/*', async (route) => { … route.fulfill({ … }) })
+```
+
+— a real browser, a real bundle, and every network request answered from a fixture. What that
+proves is "this app renders correctly when its API works", and it is structurally incapable of
+noticing that the API is unreachable. It was sitting at the exact seam where nothing else was
+looking. `src/browser/smoke.test.ts` and a CI step both assert, as text over this repository's
+sources, that no `route`, `fulfill`, `abort` or `setOfflineMode` appears anywhere in `src/browser`.
+
+Per surface it asserts: the document answers 200; the application mounted; **the page is painted**
+(`body`'s computed background is not transparent — "renders unstyled" is a thing a human sees in
+one second and no HTTP check ever sees); **no `state--failed` or `state--forbidden` node**, which
+is the estate's own four-state component and therefore distinguishes "the query answered with
+nothing" from "the query did not answer" without this repository inventing a regex for it; no
+failed request; no uncaught exception; no console error; and that the surface rendered words only
+its own bundle produces.
+
+**TLS.** The dev gateway serves a certificate issued by a local CA that no trust store has
+enrolled. `ignoreHTTPSErrors: true` would accept that — and would also accept an expired
+certificate, one issued for another hostname, and an active man-in-the-middle, in every
+environment, for ever. Instead `src/browser/estatecert.ts` reads the certificate over a plain TLS
+socket before any browser starts, and pins **one leaf public key** through Chromium's
+`--ignore-certificate-errors-spki-list`, which excuses errors only for the keys named. It refuses
+to pin a publicly trusted certificate (nothing needs excusing), an expired or not-yet-valid one, a
+certificate that does not cover the hostname, or any verification failure other than an unreachable
+root. Driven, not assumed: the leaf's SPKI loads the page, one changed byte fails
+`ERR_CERT_AUTHORITY_INVALID`, and so does the issuing CA's SPKI — which is why the leaf is what
+gets pinned.
+
+**Exit codes: 0 healthy · 1 something a person would see is broken · 2 the estate was unreachable
+or there is no browser.** Two and not zero, for the same reason `beacon browser` treats a skip as a
+failure: `node --test` can only *skip* the browser half where no estate answers, and a pipeline
+reading a skip reads a green. A deploy script runs this command instead and cannot get a success it
+did not earn.
 
 ---
 

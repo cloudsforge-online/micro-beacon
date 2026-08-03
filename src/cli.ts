@@ -40,6 +40,7 @@ const USAGE = `beacon <command>
 
   gate      ask the release gate, as an exit code
   browser   drive the declared tier-3 browser journeys against a running estate
+  smoke     drive EVERY surface of a running estate in a real browser, stubbing nothing
 
 beacon gate --release <tag> [--url <base>] [--token <token>] [--json] [--record]
 
@@ -63,6 +64,22 @@ beacon browser [--targets <name=url,...>] [--browser <path>] [--insecure-tls] [-
 
 exit codes: 0 every declared journey passed · 1 one failed, errored or SKIPPED · 2 nothing
 was declared, or the arguments were wrong
+
+beacon smoke [--apex <host>] [--browser <path>] [--timeout <ms>] [--surface <key>]
+
+  Signs in for real and loads all sixteen surfaces through the gateway. Nothing is stubbed,
+  intercepted or fulfilled from a fixture; the gateway's own certificate is accepted by pinning
+  its public key, and no other certificate error is excused anywhere.
+
+  --apex      the estate's apex. Defaults to BEACON_SMOKE_APEX, then cloudsforge.localtest.me.
+  --browser   a Chromium executable. Defaults to BEACON_BROWSER_EXECUTABLE.
+  --timeout   per-operation timeout in ms. Default 20000.
+  --surface   run one surface only, repeatable. Defaults to all sixteen.
+
+  Credentials come from BEACON_SMOKE_IDENTIFIER / _PASSWORD / _HANDLE.
+
+exit codes: 0 every surface is healthy · 1 something a person would see is broken · 2 the
+estate could not be reached, there is no browser, or the arguments were wrong
 `
 
 interface Args {
@@ -334,8 +351,150 @@ export async function runBrowser(args: BrowserArgs): Promise<0 | 1 | 2> {
   return bad === 0 ? 0 : 1
 }
 
+/* ------------------------------------------------------------------ beacon smoke */
+
+interface SmokeArgs {
+  readonly apex: string
+  readonly executablePath: string
+  readonly timeoutMs: number
+  readonly surfaces: readonly string[]
+}
+
+export function parseSmokeArgs(
+  args: readonly string[],
+  source: Record<string, string | undefined>,
+): SmokeArgs | null {
+  let apex = source['BEACON_SMOKE_APEX'] ?? 'cloudsforge.localtest.me'
+  let executablePath = source['BEACON_BROWSER_EXECUTABLE'] ?? ''
+  let timeoutMs = 20_000
+  const surfaces: string[] = []
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '--apex') apex = args[++i] ?? ''
+    else if (arg === '--browser') executablePath = args[++i] ?? ''
+    else if (arg === '--timeout') timeoutMs = Number(args[++i] ?? '')
+    else if (arg === '--surface') surfaces.push(args[++i] ?? '')
+    else if (arg?.startsWith('--apex=')) apex = arg.slice('--apex='.length)
+    else if (arg?.startsWith('--browser=')) executablePath = arg.slice('--browser='.length)
+    else if (arg?.startsWith('--timeout=')) timeoutMs = Number(arg.slice('--timeout='.length))
+    else if (arg?.startsWith('--surface=')) surfaces.push(arg.slice('--surface='.length))
+    else return null
+  }
+  if (!/^[a-z0-9.-]+$/.test(apex)) return null
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000) return null
+  if (surfaces.some((s) => s === '')) return null
+  return { apex, executablePath, timeoutMs, surfaces }
+}
+
+/**
+ * `beacon smoke` — the estate, in a real browser, with nothing stubbed.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **AN ABSENT ESTATE AND AN ABSENT BROWSER ARE EXIT 2, NEVER EXIT 0.**
+ *
+ * The command exists because `node --test` can only SKIP the browser half where no estate answers,
+ * and a pipeline reading a skipped suite reads a green. This is the entry point a deploy script
+ * uses instead, and its whole contract is that it cannot report success without having looked:
+ * "nothing was listening" and "there is no Chromium" both block, exactly as `beacon browser`
+ * treats a skip as an exit 1 for the same reason.
+ *
+ * Nothing is written anywhere. Recording runs is the SERVICE's job, on a lease.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export async function runSmokeCommand(args: SmokeArgs): Promise<0 | 1 | 2> {
+  // Lazy, for the reason the module docstring gives about `env.ts`: this command drives a browser
+  // against a public hostname and must never require a database credential to do it.
+  const smoke = await import('./browser/smoke.ts')
+  const { collectPins } = await import('./browser/estatecert.ts')
+  const { browserAvailable } = await import('./browser/driver.ts')
+
+  const reachable = await smoke.estateReachable(args.apex)
+  if (!reachable.ok) {
+    stderr.write(`${reachable.reason}\n`)
+    return 2
+  }
+
+  const config = { enabled: true, executablePath: args.executablePath, timeoutMs: args.timeoutMs }
+  const availability = await browserAvailable(config)
+  if (!availability.ok) {
+    stderr.write(`${availability.reason}\n  the estate is up and nothing is looking at it.\n`)
+    return 2
+  }
+
+  const selected =
+    args.surfaces.length === 0
+      ? smoke.SMOKE_SURFACES
+      : smoke.SMOKE_SURFACES.filter((s) => args.surfaces.includes(s.key))
+  if (selected.length !== args.surfaces.length && args.surfaces.length > 0) {
+    const known = smoke.SMOKE_SURFACES.map((s) => s.key).join(', ')
+    stderr.write(`--surface named something that is not a surface. Known: ${known}\n`)
+    return 2
+  }
+
+  const hosts = selected.map((s) => (s.subdomain === '' ? args.apex : `${s.subdomain}.${args.apex}`))
+  const pins = await collectPins(hosts)
+  for (const reason of pins.reasons) stdout.write(`tls  ${reason}\n`)
+  stdout.write('\n')
+
+  const result = await smoke.runSmoke({
+    apex: args.apex,
+    credentials: {
+      identifier: process.env['BEACON_SMOKE_IDENTIFIER'] ?? 'estate-admin@example.test',
+      password: process.env['BEACON_SMOKE_PASSWORD'] ?? 'correct-horse-battery-staple-42',
+      handle: process.env['BEACON_SMOKE_HANDLE'] ?? 'estateadmin',
+    },
+    browser: { ...config, certificatePins: pins.spki },
+    surfaces: selected,
+  })
+
+  const bySurface = new Map<string, number>()
+  for (const finding of result.findings) {
+    bySurface.set(finding.surfaceKey, (bySurface.get(finding.surfaceKey) ?? 0) + 1)
+  }
+
+  const signInBad = bySurface.get('sign-in') ?? 0
+  stdout.write(`  ${signInBad === 0 ? 'pass' : 'FAIL'}  sign-in  ${result.signIn.landedAt}\n`)
+  for (const observation of result.observations) {
+    const bad = bySurface.get(observation.surfaceKey) ?? 0
+    stdout.write(
+      `  ${bad === 0 ? 'pass' : 'FAIL'}  ${observation.surfaceKey.padEnd(16)} ` +
+        `HTTP ${String(observation.status ?? 'ERR').padEnd(4)} ` +
+        `${String(observation.bodyText.trim().length).padStart(5)} chars  ${observation.url}\n`,
+    )
+  }
+
+  if (result.findings.length > 0) {
+    stdout.write(`\n${result.findings.length} finding(s):\n`)
+    for (const finding of result.findings) {
+      stdout.write(`  [${finding.surfaceKey}] ${finding.check}\n      ${finding.detail}\n`)
+    }
+  }
+
+  // Named and never counted, exactly as `driver.ts` partitions it: the reporter being broken is
+  // worth knowing about and is not the product being broken.
+  const aside = smoke.observabilityAside(result.observations)
+  if (aside.length > 0) {
+    stdout.write(`\nnot counted — ${aside.length} browser-telemetry post(s) failed:\n`)
+    for (const line of [...new Set(aside)]) stdout.write(`  ${line}\n`)
+  }
+
+  const healthy = result.observations.length + 1 - bySurface.size
+  stdout.write(`\n${healthy}/${result.observations.length + 1} healthy\n`)
+  return result.findings.length === 0 ? 0 : 1
+}
+
 export async function main(argsIn: readonly string[]): Promise<0 | 1 | 2> {
   const [command, ...rest] = argsIn
+
+  if (command === 'smoke') {
+    const smokeArgs = parseSmokeArgs(rest, process.env)
+    if (!smokeArgs) {
+      stderr.write(USAGE)
+      return 2
+    }
+    return runSmokeCommand(smokeArgs)
+  }
 
   if (command === 'browser') {
     const browserArgs = parseBrowserArgs(rest, process.env)

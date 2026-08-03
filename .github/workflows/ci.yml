@@ -155,6 +155,44 @@ jobs:
           grep -A6 "define('GET', '/metrics'" src/server.ts | grep -q 'authorise' \
             || { echo '::error::/metrics is no longer authenticated; it publishes the shape of the estate'; exit 1; }
 
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # THE SMOKE TIER STUBS NOTHING, AND THIS IS THE CONTROL THAT KEEPS IT THAT WAY.
+      #
+      # The estate shipped completely unusable and green because every frontend's browser suite
+      # did `page.route('**/*', … route.fulfill(…))` — a real browser answering its own requests
+      # from a fixture, structurally unable to notice that the API was unreachable. src/browser is
+      # this repository's answer and the property that makes it worth anything is the negative
+      # one. `smoke.test.ts` asserts it from inside the suite; this asserts it from outside, so a
+      # change that also edited that test cannot make it disappear quietly.
+      #
+      # smoke.test.ts itself is excluded, and only it: it must spell the forbidden calls out in
+      # order to look for them. That exclusion is covered by its own case, which plants a real
+      # interception and requires the scanner to find it.
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      - name: 'The smoke tier intercepts nothing'
+        run: |
+          if grep -rnE '\.(route|fulfill|abort)\s*\(|setOfflineMode' src/browser/ --include='*.ts' \
+             | grep -v '^src/browser/smoke.test.ts:' \
+             | grep -vE '^[^:]+:[0-9]+: *(//|\*)'; then
+            echo '::error::a request interception appeared in the browser tier — that is the defect this tier exists to end'
+            exit 1
+          fi
+          echo 'ok: no request interception in src/browser'
+
+      - name: 'The smoke tier still refuses to blanket-ignore TLS errors'
+        run: |
+          # `ignoreHTTPSErrors: true` for a whole run is a check that cannot fail: it reports green
+          # through an expired certificate, a wrong-hostname certificate and an active
+          # man-in-the-middle. estatecert.ts pins ONE public key instead, and refuses to pin any of
+          # those three.
+          grep -q 'PRIVATE_ROOT_ERRORS' src/browser/estatecert.ts \
+            || { echo '::error::the pin allowlist is gone; anything can now be excused'; exit 1; }
+          if grep -n 'ignoreHttpsErrors' src/browser/smoke.ts; then
+            echo '::error::the smoke tier reached for a blanket TLS exemption'
+            exit 1
+          fi
+          echo 'ok: the smoke tier pins a key rather than ignoring certificates'
+
       - name: 'The CLI still has no --force'
         run: |
           if grep -n "'--force'" src/cli.ts; then

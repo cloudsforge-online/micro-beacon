@@ -98,6 +98,19 @@ export interface BrowserConfig {
    * Optional so that omitting it is the strict behaviour: a deployment has to say the word.
    */
   readonly ignoreHttpsErrors?: boolean
+  /**
+   * base64(SHA-256(SPKI)) of the certificates that may be excused, and **nothing else may be**.
+   *
+   * The narrow alternative to `ignoreHttpsErrors`, and the one `smoke.ts` uses. Chromium's
+   * `--ignore-certificate-errors-spki-list` does not switch validation off; it excuses errors only
+   * for the exact public keys named. An expired certificate on another host, a certificate issued
+   * for the wrong name, and an active substitution all still fail — which is the difference
+   * between accepting *this* dev gateway and accepting anything.
+   *
+   * `estatecert.ts` decides what goes in here, and refuses to pin a CA-issued or out-of-window
+   * certificate. See its header for why that refusal is the point.
+   */
+  readonly certificatePins?: readonly string[]
 }
 
 export type Availability =
@@ -417,6 +430,26 @@ export interface PageRun<T> {
 }
 
 /**
+ * The command line Chromium is launched with. Exported so it can be pinned without a browser.
+ *
+ * The three constants are not preferences. `--no-sandbox` because the container runs as root;
+ * `--disable-dev-shm-usage` because Docker's default 64MB `/dev/shm` makes Chromium crash on any
+ * non-trivial page, and a crashed browser reports as a failing journey rather than as the
+ * misconfiguration it is.
+ *
+ * The fourth is added only when a pin was decided (`estatecert.ts`), and an EMPTY list must never
+ * produce the flag: `--ignore-certificate-errors-spki-list=` with nothing after it is a flag whose
+ * behaviour nobody in this repository has established, and guessing about a security control is
+ * how the control stops being one.
+ */
+export function launchArgs(config: BrowserConfig): readonly string[] {
+  const args = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+  const pins = config.certificatePins ?? []
+  if (pins.length > 0) args.push(`--ignore-certificate-errors-spki-list=${pins.join(',')}`)
+  return args
+}
+
+/**
  * Drive a page, collecting the failures a human would notice and a fetch cannot see.
  *
  * The collected arrays are the point: a page that renders while throwing a ReferenceError and
@@ -443,7 +476,7 @@ export async function withPage<T>(
     // --no-sandbox because the container runs as root; --disable-dev-shm-usage because Docker's
     // default 64MB /dev/shm makes Chromium crash on any non-trivial page, and a crashed browser
     // reports as a failing journey rather than as the misconfiguration it is.
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    args: launchArgs(config),
   })
 
   const sink: Sink = newSink()

@@ -12,6 +12,8 @@
     "start": "node --import tsx src/index.ts",
     "migrate": "node --import tsx src/migrator.ts",
     "gate": "node --import tsx src/cli.ts gate",
+    "_smoke": "The estate in a real browser, stubbing nothing. Separate from `test` on purpose: `test` SKIPS the browser half where no estate answers, which is right for a test run and fatal for a pipeline, so a deploy script runs THIS and gets exit 2 rather than a green when nothing was there to look at.",
+    "smoke": "node --import tsx src/cli.ts smoke",
     "typecheck": "tsc --noEmit",
     "_test": "--test-concurrency=1 is required, not a preference: every database test file truncates this service's tables between cases, and node:test runs FILES in parallel by default. A TRUNCATE takes an AccessExclusiveLock, so one file's reset deadlocks against another file's inserts (40P01). Cases within a file already run in order.",
     "_testGlob": "src/browser/*.test.ts is named EXPLICITLY. A shell glob does not recurse, so adding a directory under src/ and nothing else would have left its tests unrun while the suite went green — which is the same defect as a CI job that builds an image and never boots it.",

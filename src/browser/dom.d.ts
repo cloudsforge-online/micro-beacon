@@ -42,3 +42,18 @@ interface HTMLButtonElement {
 interface HTMLElement {
   readonly innerText: string
 }
+
+/**
+ * `smoke.ts` asks whether the page is PAINTED, not just mounted.
+ *
+ * Two members and no more. `backgroundColor` is the one that decides: every CloudsForge surface
+ * paints `body` from its own stylesheet, so `rgba(0, 0, 0, 0)` means that sheet did not apply and
+ * the user is looking at unstyled markup on white. `fontFamily` is carried alongside purely so the
+ * failure message can say what the browser fell back to — it is never asserted on, because the
+ * default serif's NAME differs between an operator's macOS and CI's Linux and an assertion on it
+ * would be a check that means something different in each place.
+ */
+declare function getComputedStyle(element: unknown): {
+  readonly backgroundColor: string
+  readonly fontFamily: string
+}
