@@ -76,6 +76,22 @@ export interface BrowserConfig {
   /** Absolute path to a Chromium. Empty means "let playwright find its own". */
   readonly executablePath: string
   readonly timeoutMs: number
+  /**
+   * Accept a certificate the browser would refuse. **Off unless a deployment asks for it.**
+   *
+   * A production journey must fail on an expired or mis-issued certificate — that is one of the
+   * few outages a synthetic monitor sees before a customer does, and a monitor that ignores TLS is
+   * a monitor that reports green through it.
+   *
+   * The dev estate is the case that needs it and states why: `deploy/gateway` terminates TLS with
+   * Traefik's built-in self-signed default (`CN=TRAEFIK DEFAULT CERT`), because
+   * `ui/packages/ui/src/surfaces.ts` emits `https://` unconditionally and there is no CA on a
+   * laptop. Without this flag every browser journey against that estate fails at `page.goto` with
+   * `ERR_CERT_AUTHORITY_INVALID` — a red that says nothing about the product.
+   *
+   * Optional so that omitting it is the strict behaviour: a deployment has to say the word.
+   */
+  readonly ignoreHttpsErrors?: boolean
 }
 
 export type Availability =
@@ -159,12 +175,24 @@ export interface Collected {
   readonly consoleErrors: readonly string[]
   readonly pageErrors: readonly string[]
   readonly failedRequests: readonly FailedRequest[]
+  /**
+   * Failures of the browser-observability sink, kept apart from the product's own requests.
+   *
+   * See `isObservabilitySink`. Reported by `assertClean`, never fatal on their own.
+   */
+  readonly observabilityFailures: readonly FailedRequest[]
 }
 
 interface Sink {
   consoleErrors: string[]
   pageErrors: string[]
   failedRequests: FailedRequest[]
+  observabilityFailures: FailedRequest[]
+}
+
+/** A fresh collector. One place, so a caller cannot forget the fourth array. */
+export function newSink(): Sink {
+  return { consoleErrors: [], pageErrors: [], failedRequests: [], observabilityFailures: [] }
 }
 
 /**
@@ -185,6 +213,56 @@ export function countsAsFailure(url: string, failure: string): boolean {
   if (failure === 'net::ERR_ABORTED') return false
   if (/favicon/i.test(url)) return false
   return true
+}
+
+/**
+ * Is this request the page reporting its own errors, rather than the page working?
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE REPORTER FAILING IS NOT THE PAGE FAILING, AND CONFLATING THEM MAKES EVERY JOURNEY RED.**
+ *
+ * Every frontend in the estate posts browser errors to Lantern from `src/lib/obs.ts`, whose own
+ * rule 1 is "IT NEVER THROWS. Telemetry that can break the page it measures is worse than no
+ * telemetry", and whose rule 2 is "IT NEVER REPORTS ITSELF. A failed report must not produce a
+ * report — that is an outage amplifier." A journey that goes red because the error-reporter could
+ * not report is that same amplifier one layer up: the page is fine and the board is red.
+ *
+ * This is not hypothetical here. Driving `hub.<apex>/account/register` in Chromium against the
+ * running estate produced, on every one of three flows:
+ *
+ *     net::ERR_FAILED https://lantern.<apex>/ingest/browser
+ *
+ * for two independent reasons, both real and neither this repository's to fix:
+ *
+ *   1. **micro-lantern is not in `deploy/compose/docker-compose.estate.yml` at all** — 22 domain
+ *      services are, and it is not one of them — so `lantern.<apex>` has no router and no CORS
+ *      allowance.
+ *   2. **The two sides do not agree on the path.** `hub-web/src/lib/obs.ts:51` posts to
+ *      `/ingest/browser`; `lantern/src/server.ts:333` defines `POST /ingest/client` and
+ *      `OPTIONS /ingest/client`. Deploying Lantern would turn `ERR_FAILED` into a 404 and change
+ *      nothing else. It is the same class of defect doc 22 §8.1 recorded for `/auth/exchange`
+ *      against `/auth/handoff/redeem`, found the same way — by driving it.
+ *
+ * So these are PARTITIONED, not discarded: `assertClean` names them in its message on every
+ * failure, and `Collected.observabilityFailures` is there for a caller that wants to assert on
+ * them directly. The precedent is in this file already — console errors are collected and reported
+ * and are not fatal alone, "because a journey that fails on any `console.error` is a journey that
+ * fails for ever for reasons nobody owns". A permanently-failing declared journey is the exact
+ * thing `journeys.ts`'s header refuses.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ *
+ * Matched on PATH, not on hostname. A hostname would be a copy of the surface registry, which is
+ * the mistake `ui/packages/ui/src/surfaces.ts` exists to end; the path is the contract, and it is
+ * the half of the contract that is wrong.
+ */
+export function isObservabilitySink(url: string): boolean {
+  let path: string
+  try {
+    path = new URL(url).pathname
+  } catch {
+    return false
+  }
+  return path === '/ingest/browser' || path === '/ingest/client'
 }
 
 /* ------------------------------------------------------------------ the assertions */
@@ -237,24 +315,90 @@ export function assertRendered(text: string, collected: Collected, where: string
  * fails on any `console.error` is a journey that fails for ever for reasons nobody owns. An
  * uncaught exception and a failed request are different — both are the page not working.
  */
-export function assertClean(collected: Collected, where: string): Verdict {
+/**
+ * A failure the scenario is ABOUT, declared by the scenario that expects it.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **A REFUSAL SCENARIO'S 4xx IS THE ASSERTION, NOT A DEFECT — AND IT ARRIVES IN THE SAME BUCKET.**
+ *
+ * BJ-ACC-02 registers with a handle that is already taken and asserts the sentence identity
+ * returns. Driven against the estate, the page produced exactly what it should:
+ *
+ *     HTTP409 https://nimbus.<apex>/auth/register
+ *
+ * `assertClean` cannot tell that from a bundle 404ing, so a refusal scenario either declares the
+ * one exchange it expects or can never be green. Declared, narrow and per-journey — never a
+ * blanket "ignore 4xx", which would delete the check for every scenario at once.
+ *
+ * Both fields must match. `status` alone would let ANY 409 on the page satisfy it; `path` alone
+ * would let a 500 on the same route pass as the expected refusal, which is the wrong outcome
+ * wearing the right route.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export interface ExpectedFailure {
+  /** Exact pathname, as the service routes it. Not a substring — a route is a fact. */
+  readonly path: string
+  /** The status the scenario asserts the estate answers. */
+  readonly status: number
+}
+
+function isExpected(request: FailedRequest, expected: readonly ExpectedFailure[]): boolean {
+  let path: string
+  try {
+    path = new URL(request.url).pathname
+  } catch {
+    return false
+  }
+  return expected.some((e) => e.path === path && request.failure === `HTTP ${e.status}`)
+}
+
+/**
+ * Did the page get through the load without breaking?
+ *
+ * Console errors are collected and reported but are **not** fatal on their own, for the reason the
+ * frozen helper gives: third-party widgets and browser extensions produce them, and a journey that
+ * fails on any `console.error` is a journey that fails for ever for reasons nobody owns. An
+ * uncaught exception and a failed request are different — both are the page not working.
+ *
+ * Two things are held to that same standard and are reported rather than fatal: the browser
+ * observability sink (see `isObservabilitySink`), and the exchanges a refusal scenario declares it
+ * expects. Everything else still fails, including a 404 on a chunk, which is the case this exists
+ * for.
+ */
+export function assertClean(
+  collected: Collected,
+  where: string,
+  expected: readonly ExpectedFailure[] = [],
+): Verdict {
+  // Appended to every failure message rather than hidden: the reporter being broken is worth
+  // knowing about, it just is not worth calling the product broken over.
+  const aside =
+    collected.observabilityFailures.length > 0
+      ? ` (also, and NOT counted: ${collected.observabilityFailures.length} browser-observability ` +
+        `post(s) failed — ${collected.observabilityFailures[0]?.failure} ` +
+        `${collected.observabilityFailures[0]?.url})`
+      : ''
+
   if (collected.pageErrors.length > 0) {
     return {
       ok: false,
       reason:
         `${where}: the page threw ${collected.pageErrors.length} uncaught error(s) — ` +
-        collected.pageErrors.slice(0, 3).join(' | '),
+        collected.pageErrors.slice(0, 3).join(' | ') +
+        aside,
     }
   }
-  if (collected.failedRequests.length > 0) {
+  const unexpected = collected.failedRequests.filter((r) => !isExpected(r, expected))
+  if (unexpected.length > 0) {
     return {
       ok: false,
       reason:
-        `${where}: ${collected.failedRequests.length} request(s) failed — ` +
-        collected.failedRequests
+        `${where}: ${unexpected.length} request(s) failed — ` +
+        unexpected
           .slice(0, 3)
           .map((r) => `${r.failure} ${r.url}`)
-          .join(' | '),
+          .join(' | ') +
+        aside,
     }
   }
   return OK
@@ -296,12 +440,15 @@ export async function withPage<T>(
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
   })
 
-  const sink: Sink = { consoleErrors: [], pageErrors: [], failedRequests: [] }
+  const sink: Sink = newSink()
 
   try {
     const context = await browser.newContext({
       viewport: options.viewport ?? { width: 1280, height: 900 },
-      ignoreHTTPSErrors: false,
+      // Defaulted to the strict value HERE rather than in `BrowserConfig`, so that a config object
+      // built without the field is strict. An optional field whose absence means "permissive" is
+      // how a production deployment ends up ignoring certificates because somebody added a key.
+      ignoreHTTPSErrors: config.ignoreHttpsErrors ?? false,
       userAgent: 'CloudsForge-Beacon/1.0 (synthetic monitoring)',
     })
     const page = await context.newPage()
@@ -333,7 +480,9 @@ export function attach(page: Pick<BrowserPage, 'on'>, sink: Sink): void {
     const failure = req.failure()?.errorText ?? 'unknown'
     const url = req.url()
     if (!countsAsFailure(url, failure)) return
-    sink.failedRequests.push({ url: url.slice(0, 300), method: req.method(), failure })
+    const record = { url: url.slice(0, 300), method: req.method(), failure }
+    if (isObservabilitySink(url)) sink.observabilityFailures.push(record)
+    else sink.failedRequests.push(record)
   }) as (arg: never) => void)
 
   // The listener the frozen helper added and the one that catches the 404ing bundle: a request
@@ -347,10 +496,12 @@ export function attach(page: Pick<BrowserPage, 'on'>, sink: Sink): void {
     if (res.status() < 400) return
     const url = res.url()
     if (!countsAsFailure(url, `HTTP ${res.status()}`)) return
-    sink.failedRequests.push({
+    const record = {
       url: url.slice(0, 300),
       method: res.request().method(),
       failure: `HTTP ${res.status()}`,
-    })
+    }
+    if (isObservabilitySink(url)) sink.observabilityFailures.push(record)
+    else sink.failedRequests.push(record)
   }) as (arg: never) => void)
 }

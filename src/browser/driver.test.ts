@@ -33,6 +33,8 @@ import {
   attach,
   browserAvailable,
   countsAsFailure,
+  isObservabilitySink,
+  newSink,
   withPage,
   type BrowserConfig,
   type Collected,
@@ -40,7 +42,12 @@ import {
 } from './driver.ts'
 import { JourneySkip } from '../journeys.ts'
 
-const NOTHING: Collected = { consoleErrors: [], pageErrors: [], failedRequests: [] }
+const NOTHING: Collected = {
+  consoleErrors: [],
+  pageErrors: [],
+  failedRequests: [],
+  observabilityFailures: [],
+}
 
 /* ------------------------------------------------------------------ the pure half */
 
@@ -96,6 +103,97 @@ test('a failed request fails, and the message names it', () => {
   assert.match(verdict.reason, /net::ERR_FAILED https:\/\/api\.test\/v1\/x/)
 })
 
+test('THE OBSERVABILITY SINK IS PARTITIONED, REPORTED, AND NEVER FATAL ON ITS OWN', () => {
+  // Driving hub.<apex>/account/register against the running estate produced exactly this on all
+  // three flows: `net::ERR_FAILED https://lantern.<apex>/ingest/browser`. Two real causes, neither
+  // this repository's — lantern is not in the estate compose file at all, and the two sides
+  // disagree on the path (obs.ts:51 posts /ingest/browser, lantern/src/server.ts:333 serves
+  // /ingest/client). A journey that goes red because the ERROR REPORTER could not report is the
+  // outage amplifier obs.ts's own rule 2 forbids, one layer up.
+  const beaconFailure = {
+    url: 'https://lantern.test/ingest/browser',
+    method: 'POST',
+    failure: 'net::ERR_FAILED',
+  }
+  assert.equal(assertClean({ ...NOTHING, observabilityFailures: [beaconFailure] }, 'x').ok, true)
+
+  // Reported, not swallowed: when something else fails, the message says the reporter is down too.
+  const verdict = assertClean(
+    {
+      ...NOTHING,
+      observabilityFailures: [beaconFailure],
+      failedRequests: [{ url: 'https://hub.test/assets/app.js', method: 'GET', failure: 'HTTP 404' }],
+    },
+    'web.hub',
+  )
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /assets\/app\.js/)
+  assert.match(verdict.reason, /NOT counted/)
+})
+
+test('the sink is recognised by PATH, so no hostname leaks into this repository', () => {
+  assert.equal(isObservabilitySink('https://lantern.example.test/ingest/browser'), true)
+  assert.equal(isObservabilitySink('https://anything.at.all/ingest/client'), true)
+  // The product's own requests are never the sink, however similar they look.
+  assert.equal(isObservabilitySink('https://hub.test/v1/dashboard'), false)
+  assert.equal(isObservabilitySink('https://hub.test/ingest/browser/extra'), false)
+  assert.equal(isObservabilitySink('not a url'), false)
+})
+
+test('attach files an observability failure apart from the product\u2019s own', () => {
+  const sink = newSink()
+  const handlers = new Map<string, (arg: unknown) => void>()
+  attach({ on: (event, handler) => handlers.set(event, handler as (arg: unknown) => void) }, sink)
+
+  handlers.get('response')?.({
+    status: () => 404,
+    url: () => 'https://lantern.test/ingest/browser',
+    request: () => ({ method: () => 'POST' }),
+  })
+  handlers.get('requestfailed')?.({
+    failure: () => ({ errorText: 'net::ERR_FAILED' }),
+    url: () => 'https://lantern.test/ingest/browser',
+    method: () => 'POST',
+  })
+  handlers.get('response')?.({
+    status: () => 500,
+    url: () => 'https://hub.test/v1/dashboard',
+    request: () => ({ method: () => 'GET' }),
+  })
+
+  assert.equal(sink.observabilityFailures.length, 2)
+  assert.deepEqual(sink.failedRequests.map((r) => r.failure), ['HTTP 500'])
+})
+
+test('A REFUSAL SCENARIO DECLARES THE ONE EXCHANGE IT EXPECTS, AND NOTHING WIDER', () => {
+  // BJ-ACC-02 registers with a taken handle. Driven, the page produced
+  // `HTTP409 https://nimbus.<apex>/auth/register` — the assertion, arriving in the same bucket as
+  // a 404ing chunk.
+  const taken = { url: 'https://nimbus.test/auth/register', method: 'POST', failure: 'HTTP 409' }
+  const collected: Collected = { ...NOTHING, failedRequests: [taken] }
+  const expected = [{ path: '/auth/register', status: 409 }]
+  assert.equal(assertClean(collected, 'x', expected).ok, true)
+
+  // Undeclared is still fatal: without the declaration the same exchange fails the journey, or
+  // the exemption would be doing nothing.
+  assert.equal(assertClean(collected, 'x').ok, false)
+
+  // The RIGHT ROUTE WITH THE WRONG STATUS is not the expected refusal. A 500 from the route that
+  // was supposed to answer 409 is the wrong outcome wearing the right address.
+  const brokenInstead: Collected = {
+    ...NOTHING,
+    failedRequests: [{ ...taken, failure: 'HTTP 500' }],
+  }
+  assert.equal(assertClean(brokenInstead, 'x', expected).ok, false)
+
+  // And the right status on ANOTHER route is not it either.
+  const elsewhere: Collected = {
+    ...NOTHING,
+    failedRequests: [{ ...taken, url: 'https://nimbus.test/auth/login' }],
+  }
+  assert.equal(assertClean(elsewhere, 'x', expected).ok, false)
+})
+
 test('a cancelled navigation and a missing favicon are not failures', () => {
   // A SPA that routes during load cancels its own requests as designed, and a favicon nobody has
   // is a 404 on every surface in the estate.
@@ -109,11 +207,7 @@ test('a 4xx RESPONSE is collected, which requestfailed never fires for', () => {
   // TypeScript the CI image resolves, and `sink.failedRequests[0].failure` is then a compile
   // error on a type nobody wrote — which is a build that fails in CI and passes on a machine with
   // an older resolution in node_modules. Exactly the drift a pinned annotation removes.
-  const sink: { consoleErrors: string[]; pageErrors: string[]; failedRequests: FailedRequest[] } = {
-    consoleErrors: [],
-    pageErrors: [],
-    failedRequests: [],
-  }
+  const sink = newSink()
   const handlers = new Map<string, (arg: unknown) => void>()
   attach({ on: (event, handler) => handlers.set(event, handler as (arg: unknown) => void) }, sink)
 
