@@ -36,6 +36,7 @@ import {
   withPage,
   type BrowserConfig,
   type Collected,
+  type FailedRequest,
 } from './driver.ts'
 import { JourneySkip } from '../journeys.ts'
 
@@ -104,7 +105,15 @@ test('a cancelled navigation and a missing favicon are not failures', () => {
 })
 
 test('a 4xx RESPONSE is collected, which requestfailed never fires for', () => {
-  const sink = { consoleErrors: [], pageErrors: [], failedRequests: [] }
+  // Annotated rather than inferred. Three empty array literals infer as `never[]` under the
+  // TypeScript the CI image resolves, and `sink.failedRequests[0].failure` is then a compile
+  // error on a type nobody wrote — which is a build that fails in CI and passes on a machine with
+  // an older resolution in node_modules. Exactly the drift a pinned annotation removes.
+  const sink: { consoleErrors: string[]; pageErrors: string[]; failedRequests: FailedRequest[] } = {
+    consoleErrors: [],
+    pageErrors: [],
+    failedRequests: [],
+  }
   const handlers = new Map<string, (arg: unknown) => void>()
   attach({ on: (event, handler) => handlers.set(event, handler as (arg: unknown) => void) }, sink)
 
