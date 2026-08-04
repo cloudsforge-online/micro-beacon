@@ -55,8 +55,32 @@ type Implementation = (
   operator: Operator | null,
 ) => JourneyDefinition
 
-/** Five EMBER, in wei. Enough to send a fraction of and still have a balance to check afterwards. */
-const SEED_EMBER = 5_000_000_000_000_000_000n
+/**
+ * The fixture's asset, and it is deliberately NOT a chain asset.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **A TEST FIXTURE MUST NOT MINT A LIABILITY NOTHING BACKS.**
+ *
+ * The first draft of this file credited 5 EMBER per run. EMBER settles on chain 7412, so a ledger
+ * credit with no matching on-chain deposit is unbacked liability — and while this was being
+ * written, reconciliation caught exactly that shape estate-wide and froze the asset:
+ * `drift_exceeded`, ledger 36e18 against chain 31e18. The runs of this journey were part of what
+ * it was measuring.
+ *
+ * SHARD is the internal unit. It settles on no chain — `micro-wallet` says so when asked to
+ * withdraw one — so crediting it creates no reconcilable position and no drift. Every assertion
+ * below is unaffected: the send flow's `client-request` half is about which BYTES left the browser,
+ * and the service refuses SHARD and EMBER alike in this estate.
+ *
+ * It also exercises a defect worth naming. `hub-web/src/components/send.tsx` filters the asset list
+ * with `/^[A-Z]+$/`, and its own comment says the intent is to exclude SHARD: "A SHARD row would be
+ * offered and then refused by the service ('does not settle on a chain'), which is a dead end
+ * presented as a choice." `SHARD` matches `^[A-Z]+$`, so the filter does the opposite of what the
+ * comment beside it says, and the form offers it.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+const SEED_ASSET = 'SHARD'
+const SEED_AMOUNT = 1_234_567n
 
 /**
  * An address that is definitely not one of this account's own wallets.
@@ -110,7 +134,7 @@ const walletRegistry: Implementation = (config, scenario, operator) =>
     critical: scenario.gate,
     async verify(ctx, page, _collected, base) {
       const account = await ctx.step('an account with a real balance, posted to the ledger', async () =>
-        fundAccount(ctx, operator, { tag: 'w1', credit: new Map([['EMBER', SEED_EMBER]]) }),
+        fundAccount(ctx, operator, { tag: 'w1', credit: new Map([[SEED_ASSET, SEED_AMOUNT]]) }),
       )
 
       await ctx.step('sign in through the page a person uses', async () => {
@@ -219,7 +243,7 @@ const sendDestinationIsConfirmed: Implementation = (config, scenario, operator) 
     expected: [{ path: '/v1/withdrawals', status: 400 }],
     async verify(ctx, page, collected, base) {
       const account = await ctx.step('an account with a real balance, posted to the ledger', async () =>
-        fundAccount(ctx, operator, { tag: 'w8', credit: new Map([['EMBER', SEED_EMBER]]) }),
+        fundAccount(ctx, operator, { tag: 'w8', credit: new Map([[SEED_ASSET, SEED_AMOUNT]]) }),
       )
 
       await ctx.step('sign in through the page a person uses', async () => {
@@ -405,7 +429,7 @@ const sendDoubleSubmit: Implementation = (config, scenario, operator) =>
     expected: [{ path: '/v1/withdrawals', status: 400 }],
     async verify(ctx, page, collected, base) {
       const account = await ctx.step('an account with a real balance, posted to the ledger', async () =>
-        fundAccount(ctx, operator, { tag: 'w9', credit: new Map([['EMBER', SEED_EMBER]]) }),
+        fundAccount(ctx, operator, { tag: 'w9', credit: new Map([[SEED_ASSET, SEED_AMOUNT]]) }),
       )
 
       await ctx.step('sign in through the page a person uses', async () => {
@@ -416,7 +440,7 @@ const sendDoubleSubmit: Implementation = (config, scenario, operator) =>
         await page.goto(`${base.replace(/\/+$/, '')}/wallet`, { waitUntil: 'domcontentloaded' })
         await settled(page, config.timeoutMs)
         await page.fill('#send-destination', FOREIGN_DESTINATION)
-        await page.fill('#send-amount', '0.1')
+        await page.fill('#send-amount', '1000')
         await page.click('button:has-text("Review")')
         await page.waitForTimeout(1_000)
         const armed = await page.evaluate(
@@ -461,9 +485,9 @@ const sendDoubleSubmit: Implementation = (config, scenario, operator) =>
       await ctx.step('and the ledger is untouched', async () => {
         const after = await ledgerBalances(account.ledger, account.subject)
         ctx.assert(
-          after.get('EMBER') === SEED_EMBER,
+          after.get(SEED_ASSET) === SEED_AMOUNT,
           `a double-submitted, refused withdrawal left ${account.subject} holding ` +
-            `${after.get('EMBER') ?? 'no account'} EMBER where it held ${SEED_EMBER}`,
+            `${after.get(SEED_ASSET) ?? 'no account'} ${SEED_ASSET} where it held ${SEED_AMOUNT}`,
         )
       })
     },

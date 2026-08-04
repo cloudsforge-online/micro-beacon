@@ -112,16 +112,33 @@ export async function fundAccount(
   const identity = { base: ctx.target('identity'), signal: ctx.signal }
   const who = syntheticCredential(ctx, options.tag)
 
-  const registration = await fetch(`${identity.base.replace(/\/+$/, '')}/auth/register`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(who),
-    signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(20_000)]),
-  })
-  if (!registration.ok) {
+  // ── THE REGISTRATION LIMITER IS REAL, AND WAITING FOR IT IS NOT WORKING AROUND IT ────────────
+  //
+  // identity caps `/auth/register` at five per window (`identity/src/server.ts:421`), taken at
+  // dispatch so a refusal costs what a success does. That is a deliberate control and this must
+  // not defeat it — but a shard of six money journeys each seeding one account WILL hit it, and a
+  // journey that reported the product broken because its own fixture was throttled would be the
+  // harness blaming the estate. So the `retry-after` the service names is HONOURED, a bounded
+  // number of times, and exhausting it is still an error rather than a silent continue.
+  let registration: Response | null = null
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    registration = await fetch(`${identity.base.replace(/\/+$/, '')}/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(who),
+      signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(20_000)]),
+    })
+    if (registration.status !== 429) break
+    // The service's own number, never a guess: it knows its window and this does not.
+    const after = Number(registration.headers.get('retry-after') ?? '5')
+    const waitMs = (Number.isFinite(after) && after > 0 ? Math.min(after, 30) : 5) * 1_000
+    await registration.arrayBuffer()
+    await new Promise((resolve) => setTimeout(resolve, waitMs))
+  }
+  if (registration === null || !registration.ok) {
     throw new Error(
-      `could not register the journey's account (HTTP ${registration.status}) — this is the ` +
-        'fixture, not the product',
+      `could not register the journey's account (HTTP ${registration?.status ?? 'no response'}) — ` +
+        'this is the fixture, not the product',
     )
   }
   const registered = (await registration.json()) as { accessToken?: unknown }
@@ -197,6 +214,13 @@ export async function signInBrowser(
   hubBase: string,
   who: { handle: string; password: string },
   timeoutMs: number,
+  /**
+   * What the signed-in page must render, when it is not the string typed into the form.
+   *
+   * identity's login field takes an address OR a handle, so an account signed in by email renders a
+   * handle the form never saw. Defaulting to `who.handle` keeps the ordinary case one argument.
+   */
+  rendersAs = who.handle,
 ): Promise<void> {
   const base = hubBase.replace(/\/+$/, '')
   await page.goto(`${base}/account/login`, { waitUntil: 'domcontentloaded' })
@@ -210,9 +234,9 @@ export async function signInBrowser(
   await page.waitForLoadState('networkidle', { timeout: timeoutMs }).catch(() => {})
   const text = await page.evaluate(() => document.body?.innerText ?? '')
   ctx.assert(
-    text.includes(who.handle),
+    text.includes(rendersAs),
     `signed in at ${base}/account/login and landed on ${page.url()} rendering ` +
-      `${text.trim().length} characters, none of which is the handle "${who.handle}" — reaching a ` +
+      `${text.trim().length} characters, none of which is the handle "${rendersAs}" — reaching a ` +
       'page is not a session',
   )
 }

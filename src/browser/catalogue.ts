@@ -317,8 +317,8 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   scenario('BJ-WAL-22', B, 'An unverified external address is not offered as a withdrawal destination', 'presentation', ['hub', 'wallet'], { outcome: 'refusal', ownedBy: 'wallet/src/server.test.ts', blocked: NO_SIGNER }),
 
   /* ---- group C */
-  scenario('BJ-DSH-01', C, 'Hub overview with every upstream healthy: eleven tiles, total equals the sum', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing', 'wallet', 'activity', 'billing'], { gate: true }),
-  scenario('BJ-DSH-17', C, 'Activity feed: the second page is appended and the cursor passed back unparsed', 'client-request', ['hub', 'hub-api', 'activity'], { gate: true }),
+  scenario('BJ-DSH-01', C, 'Hub overview with every upstream healthy: eleven tiles, total equals the sum', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing', 'wallet', 'activity', 'billing', 'identity'], { gate: true }),
+  scenario('BJ-DSH-17', C, 'Activity feed: the second page is appended and the cursor passed back unparsed', 'client-request', ['hub', 'hub-api', 'activity', 'ledger', 'identity'], { gate: true }),
   scenario('BJ-DSH-20', C, 'Activity shows events from at least six different services', 'presentation', ['hub', 'hub-api', 'activity'], {}),
 
   /* ---- group D */
@@ -426,7 +426,7 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   scenario('BJ-XS-01', R, 'One account signs into everything, once: Hub → Worlds → Market, no second prompt', 'presentation', ['account', 'identity', 'hub', 'hub-api', 'worlds', 'market'], { gate: true }),
   scenario('BJ-XS-02', R, 'The profile created at registration renders in Market, Worlds and Community', 'presentation', ['account', 'identity', 'market', 'worlds', 'community'], { blocked: NO_COMMUNITY_UI }),
   scenario('BJ-XS-03', R, 'The wallet is the same screen at the same address from Worlds, Trade and Create', 'navigation', ['hub', 'worlds', 'trade', 'create'], {}),
-  scenario('BJ-XS-04', R, 'The total on Hub overview and on Hub portfolio are equal and share a pricedAt', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing'], { gate: true }),
+  scenario('BJ-XS-04', R, 'The total on Hub overview and on Hub portfolio are equal and share a pricedAt', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing', 'identity'], { gate: true }),
   scenario('BJ-XS-05', R, 'Act in three products, then see all three in one feed with six originating services', 'presentation', ['hub', 'hub-api', 'activity'], { gate: true }),
   scenario('BJ-XS-06', R, 'Earn a reward in a world, spend it in Market, see both legs on one timeline', 'presentation', ['worlds', 'market', 'hub-api', 'activity'], { blocked: NO_WORLD_CLIENT }),
   scenario('BJ-XS-07', R, 'A Studio brand kit becomes game content and a Market listing under one asset id', 'presentation', ['studio', 'worlds', 'market'], { blocked: NO_STUDIO_UI }),

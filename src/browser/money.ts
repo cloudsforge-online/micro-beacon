@@ -190,15 +190,31 @@ export async function signInForToken(
   identifier: string,
   password: string,
 ): Promise<string> {
-  const response = await fetch(`${identity.base.replace(/\/+$/, '')}/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier, password }),
-    ...(identity.signal ? { signal: identity.signal } : {}),
-  })
-  if (!response.ok) {
+  // ── THE LOGIN LIMITER IS REAL, AND WAITING FOR IT IS NOT DEFEATING IT ────────────────────────
+  //
+  // identity caps `/auth/login` at ten per window (`identity/src/server.ts:422`), taken at dispatch
+  // so a refusal costs what a success does. A shard of six money journeys signs the operator in
+  // once each to mint a service token, and will reach it. Honouring the `retry-after` the service
+  // itself names — a bounded number of times, and still an error when exhausted — is the difference
+  // between a harness that waits its turn and one that reports the product broken because it was
+  // throttled.
+  let response: Response | null = null
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    response = await fetch(`${identity.base.replace(/\/+$/, '')}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ identifier, password }),
+      ...(identity.signal ? { signal: identity.signal } : {}),
+    })
+    if (response.status !== 429) break
+    const after = Number(response.headers.get('retry-after') ?? '5')
+    const waitMs = (Number.isFinite(after) && after > 0 ? Math.min(after, 30) : 5) * 1_000
+    await response.arrayBuffer()
+    await new Promise((resolve) => setTimeout(resolve, waitMs))
+  }
+  if (response === null || !response.ok) {
     throw new MoneyError(
-      `identity refused the operator credential (HTTP ${response.status}) — set ` +
+      `identity refused the operator credential (HTTP ${response?.status ?? 'no response'}) — set ` +
         'BEACON_ESTATE_OPERATOR / _PASSWORD to an account that can mint service tokens',
     )
   }

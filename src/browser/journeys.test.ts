@@ -123,7 +123,7 @@ test('the unimplemented gap is stated rather than silent', () => {
   }
   // The four scenarios closest to being written are named, because a shape check alone would pass
   // against a file that had quietly lost one.
-  for (const id of ['BJ-NET-09', 'BJ-NET-14', 'BJ-XS-01', 'BJ-DSH-01']) {
+  for (const id of ['BJ-NET-09', 'BJ-NET-14', 'BJ-XS-01', 'BJ-DSH-20']) {
     assert.ok(missing.includes(id), `${id} should still be a stated gap`)
   }
 })
@@ -146,6 +146,8 @@ test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
     'BJ-ACC-01',
     'BJ-ACC-02',
     'BJ-ACC-03',
+    'BJ-DSH-01',
+    'BJ-DSH-17',
     'BJ-FOR-01',
     'BJ-FOR-06',
     'BJ-FOR-13',
@@ -154,6 +156,7 @@ test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
     'BJ-WAL-01',
     'BJ-WAL-08',
     'BJ-WAL-09',
+    'BJ-XS-04',
     'BJ-XS-10',
   ])
 })
