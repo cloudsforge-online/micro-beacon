@@ -31,7 +31,7 @@ import {
   MARKET_CATALOGUE,
   WORLDS_REGISTRY,
 } from './estate.ts'
-import { MAX_REGISTER_WAIT_MS, registerRetryMs } from './calls.ts'
+import { MAX_REGISTER_WAIT_MS, REGISTER_RETRY_MARGIN_MS, registerRetryMs } from './calls.ts'
 import { runJourney, type JourneyDefinition, type JourneyRun } from './journeys.ts'
 import { fakeEstate, type FakeEstate, type FakeHandler } from './testsupport.ts'
 
@@ -293,14 +293,36 @@ test('a retry-after longer than the bound is a skip rather than a wait', async (
   })
 })
 
-test('the wait is bounded whatever the header says', () => {
+test('the wait is bounded whatever the header says, and clears the boundary', () => {
   // Pure, so the clamp is provable without waiting for anything.
-  assert.equal(registerRetryMs('1'), 1_000)
-  assert.equal(registerRetryMs('60'), MAX_REGISTER_WAIT_MS)
+  assert.equal(registerRetryMs('1'), 1_000 + REGISTER_RETRY_MARGIN_MS)
+  assert.equal(registerRetryMs('60'), MAX_REGISTER_WAIT_MS + REGISTER_RETRY_MARGIN_MS)
   assert.equal(registerRetryMs('61'), 0, 'over the bound is a skip, not a clamped wait')
-  assert.equal(registerRetryMs(null), 5_000, 'a missing header is the ordinary case, not an error')
-  assert.equal(registerRetryMs('not-a-number'), 5_000)
-  assert.equal(registerRetryMs('-1'), 5_000)
+  assert.equal(
+    registerRetryMs(null),
+    5_000 + REGISTER_RETRY_MARGIN_MS,
+    'a missing header is the ordinary case, not an error',
+  )
+  assert.equal(registerRetryMs('not-a-number'), 5_000 + REGISTER_RETRY_MARGIN_MS)
+  assert.equal(registerRetryMs('-1'), 5_000 + REGISTER_RETRY_MARGIN_MS)
+})
+
+test('THE WAIT ALWAYS OVERSHOOTS retry-after, NEVER LANDS ON IT', () => {
+  // The live failure this margin exists for: a retry that arrived 477ms before identity's window
+  // reset was refused a second time, so a 45-second wait bought nothing. Every returned wait must
+  // be strictly longer than what the service asked for.
+  for (const seconds of ['1', '5', '30', '45', '60']) {
+    assert.ok(
+      registerRetryMs(seconds) > Number(seconds) * 1_000,
+      `a wait of ${seconds}s must overshoot the boundary, not land on it`,
+    )
+  }
+})
+
+test('the longest possible wait still fits inside the journey deadline', () => {
+  // 90s is `runJourney`'s default. A wait that could exceed it would turn an honest skip into an
+  // `error`, which says Beacon is broken and sends the investigation to the wrong team.
+  assert.ok(MAX_REGISTER_WAIT_MS + REGISTER_RETRY_MARGIN_MS < 90_000)
 })
 
 /* ------------------------------------------------------------------ identity.signin */

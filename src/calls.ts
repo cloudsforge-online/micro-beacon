@@ -210,20 +210,47 @@ export function throwaway(): Throwaway {
 export const MAX_REGISTER_WAIT_MS = 60_000
 
 /**
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **COMING BACK AT EXACTLY `retry-after` RACES THE WINDOW BOUNDARY, AND LOSES.**
+ *
+ * The first version of this waited precisely what the header asked and was STILL refused, on the
+ * live estate, every cycle. The trace:
+ *
+ *   * identity's window opened at 08:03:53.203 and reset at 08:04:53.203.
+ *   * `identity.register` was refused at 08:04:08.2 and told `retry-after: 45`.
+ *   * It came back at 08:04:52.726 — **477ms before the reset** — and was refused again.
+ *
+ * `retry-after` is a whole number of seconds standing in for a millisecond deadline, so the value
+ * a client receives has already been rounded, and the client's own timer, the request's flight
+ * time and the two clocks each add their own error. Arriving on the nose is arriving inside the
+ * old window about half the time — and a retry that lands one window too early is worth strictly
+ * less than no retry at all, because it costs 45 seconds to learn nothing.
+ *
+ * Two seconds, not two hundred milliseconds: the cost of overshooting is two idle seconds inside
+ * a 90s deadline, and the cost of undershooting is the entire wait wasted and a CRITICAL journey
+ * reporting a skip. The asymmetry is not close.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export const REGISTER_RETRY_MARGIN_MS = 2_000
+
+/**
  * How long to sit out a 429, given whatever `retry-after` said. Pure, so the clamp is provable.
  *
  * `retry-after` is in SECONDS. Anything that is not a positive finite number becomes the floor
  * rather than an error: a limiter that answers 429 without the header is within its rights, and a
- * journey that threw on one would be stricter than the specification it is reading. Returns 0 —
- * meaning "do not wait, skip now" — only when the service asked for longer than the bound, because
- * a limiter asking for more than its own window is one a journey should give up against rather
- * than sit out past its deadline.
+ * journey that threw on one would be stricter than the specification it is reading.
+ *
+ * Returns 0 — meaning "do not wait, skip now" — only when the service asked for longer than
+ * `MAX_REGISTER_WAIT_MS`, because a limiter asking for more than its own window is one a journey
+ * should give up against rather than sit out past its deadline. The bound is applied to what the
+ * SERVICE asked for; the margin is then added on top, so the longest this can return is
+ * `MAX_REGISTER_WAIT_MS + REGISTER_RETRY_MARGIN_MS` — 62s against a 90s deadline.
  */
 export function registerRetryMs(retryAfterHeader: string | null, floorSeconds = 5): number {
   const parsed = Number(retryAfterHeader ?? '')
   const seconds = Number.isFinite(parsed) && parsed > 0 ? parsed : floorSeconds
   const ms = seconds * 1_000
-  return ms > MAX_REGISTER_WAIT_MS ? 0 : ms
+  return ms > MAX_REGISTER_WAIT_MS ? 0 : ms + REGISTER_RETRY_MARGIN_MS
 }
 
 /**
