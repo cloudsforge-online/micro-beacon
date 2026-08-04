@@ -261,7 +261,7 @@ export async function creditSubject(
     readonly amount: bigint
     readonly idempotencyKey: string
   },
-): Promise<void> {
+): Promise<string> {
   if (options.amount <= 0n) throw new MoneyError('a credit fixture must be a positive amount')
   const amount = options.amount.toString()
   const body = {
@@ -309,6 +309,68 @@ export async function creditSubject(
     throw new MoneyError(
       `the ledger refused the fixture posting (HTTP ${response.status}) — ` +
         `${(await response.text()).slice(0, 200)}`,
+    )
+  }
+  // The id is RETURNED, not discarded, because the caller is required to reverse it. See
+  // `reverseEntry` and the header of `fundAccount`.
+  const created = (await response.json()) as { entry?: { id?: unknown }; id?: unknown }
+  const id = created.entry?.id ?? created.id
+  if (typeof id !== 'string' || id === '') {
+    throw new MoneyError(
+      'the ledger accepted the fixture posting and returned no entry id, so the fixture cannot ' +
+        'reverse itself and would leave a liability behind. Refusing to continue',
+    )
+  }
+  return id
+}
+
+/**
+ * Reverse an entry this run posted, by writing a NEW entry that undoes it.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **A FIXTURE THAT MOVES MONEY AND DOES NOT PUT IT BACK IS NOT A FIXTURE. IT IS A DEPOSIT.**
+ *
+ * This is not a hypothetical. An earlier version of this file credited EMBER per run and never
+ * reversed it. Seventy fixture entries accumulated, twenty-one of them EMBER, and reconciliation
+ * measured the result exactly: custody 135321000000000000000 wei against 31000000000000000000
+ * observed on chain 7412, drift 104321000000000000000, `drift_exceeded` — and it FROZE EMBER
+ * estate-wide, refusing every withdrawal.
+ *
+ * The freeze was correct and is the guarantee the whole chain-backing design exists for: something
+ * credited a deposit that never happened and the ledger refused to agree with itself within two
+ * minutes. An entry in a double-entry ledger is indistinguishable from a real deposit BY DESIGN,
+ * which is the entire point of it, so a test tier that posts one has created money.
+ *
+ * `POST /entries/:id/reverse` writes a new, balanced, opposite entry and never edits the original —
+ * the journal is append-only and a fixture must not be able to make its own tracks disappear.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export async function reverseEntry(
+  access: LedgerAccess,
+  entryId: string,
+  why: string,
+): Promise<void> {
+  const response = await fetch(
+    `${access.base.replace(/\/+$/, '')}/entries/${encodeURIComponent(entryId)}/reverse`,
+    {
+      method: 'POST',
+      headers: { authorization: `Bearer ${access.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        // Bound to the authenticated principal by `ledger/src/server.ts:682` — `attribute()` now
+        // refuses a posting whose claimed service is not the one the token was minted for, so
+        // these two are checked rather than believed.
+        originatingService: 'wallet',
+        actor: 'service:wallet',
+        idempotencyKey: `beacon-fixture-reversal-${entryId}`,
+        description: why,
+      }),
+      ...(access.signal ? { signal: access.signal } : {}),
+    },
+  )
+  if (response.status !== 201 && response.status !== 200) {
+    throw new MoneyError(
+      `the ledger refused to reverse the fixture entry ${entryId} (HTTP ${response.status}) — ` +
+        `${(await response.text()).slice(0, 200)}. THE FIXTURE HAS LEFT A LIABILITY BEHIND`,
     )
   }
 }

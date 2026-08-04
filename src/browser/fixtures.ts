@@ -14,6 +14,19 @@
  * So this module registers a real account against identity, mints a real service token, and posts
  * a real balanced entry. The account is disposable and the domain is `.test`, which RFC 2606
  * reserves and no resolver will route mail to.
+ *
+ * ── AND IT PUTS IT BACK, IN THE SAME RUN, ON EVERY EXIT PATH ───────────────────────────────────
+ *
+ * The first version of this did not, and the consequence was measured rather than imagined: seventy
+ * fixture entries accumulated, twenty-one of them EMBER, and reconciliation compared custody's
+ * 135321000000000000000 wei against 31000000000000000000 observed on chain 7412, recorded
+ * `drift_exceeded`, and FROZE EMBER estate-wide — refusing every withdrawal in the estate.
+ *
+ * The freeze was correct. An entry in a double-entry ledger is indistinguishable from a real
+ * deposit by design, which is the whole point of one, so a test tier that posts an unreversed
+ * credit has created money. Every credit below is therefore registered for reversal through
+ * `ctx.cleanup` on the line after it is made, so a fixture's net effect on supply is zero whether
+ * the journey passed, failed, errored or skipped.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
  * ## Why the operator credential is configuration and its absence is a loud skip
@@ -30,6 +43,7 @@ import type { JourneyContext } from '../journeys.ts'
 import { wait, waitMsFor } from './backoff.ts'
 import {
   creditSubject,
+  reverseEntry,
   ledgerBalances,
   mintServiceToken,
   signInForToken,
@@ -159,7 +173,7 @@ export async function fundAccount(
   }
 
   for (const [assetCode, amount] of options.credit) {
-    await creditSubject(ledger, {
+    const entryId = await creditSubject(ledger, {
       subject,
       assetCode,
       amount,
@@ -167,6 +181,32 @@ export async function fundAccount(
       // posting the money twice — and two replicas cannot collide.
       idempotencyKey: `beacon-browser-${ctx.runId}-${assetCode}`,
     })
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // THE REVERSAL IS REGISTERED IN THE SAME BREATH AS THE CREDIT, AND THAT IS NOT TIDINESS.
+    //
+    // `ctx.cleanup` runs in reverse order on EVERY exit path — a pass, a failed assertion, a
+    // thrown error, a skip. Registering it here, immediately, means there is no line of code
+    // between creating the liability and arranging to remove it, so no future edit can introduce
+    // an early return that leaks one.
+    //
+    // It is registered per entry rather than once at the end for the same reason: if the second
+    // asset's credit throws, the first has already been booked for reversal.
+    //
+    // Seventy entries leaked before this existed. Twenty-one were EMBER, and reconciliation froze
+    // the asset estate-wide within two minutes of measuring the drift they caused — correctly. See
+    // `reverseEntry`.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    ctx.cleanup(
+      () =>
+        reverseEntry(
+          ledger,
+          entryId,
+          `Reversal of ${entryId}: a beacon browser-journey fixture credited ${amount} ` +
+            `${assetCode} to ${subject} against no deposit. The fixture posts and reverses within ` +
+            'one run so its net effect on supply is zero; this is the reversing half.',
+        ),
+      `reverse the ${assetCode} fixture credit`,
+    )
   }
 
   // ── THE FIXTURE IS VERIFIED BEFORE IT IS USED ────────────────────────────────────────────────
