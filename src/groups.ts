@@ -16,6 +16,11 @@ export const GROUPS = {
   market: 'Market',
   worlds: 'Worlds',
   network: 'Network',
+  // The sixth, added when the browser tier gained journeys that drive it. It is a PUBLIC product
+  // name — `ui/packages/ui/src/surfaces.ts:174` carries the registry row and it is a switcher
+  // entry — so it satisfies the rule above. A `foresight` group is what a customer can be told
+  // about; the service behind it is still never published.
+  foresight: 'Foresight',
 } as const
 
 export type ProductGroup = (typeof GROUPS)[keyof typeof GROUPS]

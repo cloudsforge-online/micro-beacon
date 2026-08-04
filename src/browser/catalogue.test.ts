@@ -72,7 +72,11 @@ test('ids are unique and stably shaped', () => {
 })
 
 test('every scenario names something it needs, in a namespace something can resolve', () => {
-  const resolvable = new Set([...SURFACE_KEYS, ...ESTATE_SERVICES, 'policy', 'custody', 'indexer', 'pricing', 'studio', 'community', 'devplatform', 'admin-api', 'faucet', 'trade', 'emberkin', 'aetherholm', 'mint'])
+  // `chain` is not a service and not a surface: it is the JSON-RPC endpoint of the estate's own
+  // node, resolved through BEACON_TARGETS like everything else so that pointing the suite at a
+  // different testnet is a variable rather than an edit. It is named here rather than added to
+  // ESTATE_SERVICES because nothing probes it as a service — no health endpoint, no journey group.
+  const resolvable = new Set([...SURFACE_KEYS, ...ESTATE_SERVICES, 'policy', 'custody', 'indexer', 'pricing', 'studio', 'community', 'devplatform', 'admin-api', 'faucet', 'trade', 'emberkin', 'aetherholm', 'mint', 'chain'])
   for (const scenario of T3_SCENARIOS) {
     assert.ok(scenario.needs.length > 0, `${scenario.id} needs nothing, which makes it a tier-1 scenario`)
     for (const need of scenario.needs) {
@@ -94,7 +98,12 @@ test('a blocked scenario cites the section of doc 22 that records the blocker', 
 })
 
 test('THE UNBLOCKED SET IS PINNED, BECAUSE REMOVING A BLOCKER IS A CLAIM ABOUT THE ESTATE', () => {
-  // This list was six. It is fifty-six, because three blockers were removed after being disproved
+  // This list was six, then fifty-six, and is now sixty-one: five Forge Foresight rows were
+  // added when the tier gained a chain client and could assert against `ForesightMarket`'s own
+  // storage rather than against the mirror the page renders. Doc 22 tiers four of them at
+  // T1/T2; see the note above group J in catalogue.ts for why they are here.
+  //
+  // This list was six. It is now sixty-one, because three blockers were removed after being disproved
   // in Chromium against the running estate — see the note above `NO_WALLET_WRITE` in catalogue.ts
   // for what was driven. Pinned as a LIST rather than a count so that removing a fourth blocker is
   // a reviewable change to this file and not a number quietly going up.
@@ -110,6 +119,7 @@ test('THE UNBLOCKED SET IS PINNED, BECAUSE REMOVING A BLOCKER IS A CLAIM ABOUT T
     'BJ-DSH-17', 'BJ-DSH-20', 'BJ-EMB-01', 'BJ-EMB-11', 'BJ-MKT-03', 'BJ-MKT-08',
     'BJ-MKT-12', 'BJ-NET-09', 'BJ-NET-14', 'BJ-NET-18', 'BJ-NET-20', 'BJ-NET-21',
     'BJ-TRD-02', 'BJ-TRD-03', 'BJ-TRD-04', 'BJ-TRD-06', 'BJ-TRD-12', 'BJ-TRD-13',
+    'BJ-FOR-01', 'BJ-FOR-06', 'BJ-FOR-13', 'BJ-FOR-14', 'BJ-FOR-17',
     'BJ-WAL-01', 'BJ-WLD-05', 'BJ-XS-01', 'BJ-XS-04', 'BJ-XS-05', 'BJ-XS-10',
     'BJ-XS-13', 'BJ-XS-14',
   ].sort())

@@ -76,6 +76,7 @@ import {
   type ExpectedFailure,
 } from './driver.ts'
 import { T3_SCENARIOS, type Scenario } from './catalogue.ts'
+import { FORESIGHT_IMPLEMENTATIONS } from './foresightjourneys.ts'
 
 /**
  * The fifteen surface keys, and nothing else about them.
@@ -566,6 +567,10 @@ const IMPLEMENTATIONS: Readonly<Record<string, Implementation>> = {
   'BJ-ACC-02': takenHandle,
   'BJ-ACC-03': deepLinkSignIn,
   'BJ-XS-10': switcherResolves,
+  // The money path. Split into its own file rather than added here, because these carry their own
+  // apparatus — a ledger oracle, an `eth_call` client and a set of fixtures — and folding six
+  // hundred lines of it into the registry would bury the four above. The registry stays one map.
+  ...FORESIGHT_IMPLEMENTATIONS,
 }
 
 /* ------------------------------------------------------------------ the declaration */

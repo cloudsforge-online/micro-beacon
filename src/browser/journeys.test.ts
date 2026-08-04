@@ -128,11 +128,31 @@ test('the unimplemented gap is stated rather than silent', () => {
   }
 })
 
-test('THE FOUR IMPLEMENTED SCENARIOS ARE THE FOUR THAT WERE DRIVEN', () => {
-  // Every one of these was run in Chromium against the estate before it was added, and passes
-  // there. A scenario in this list that has never been driven is the thing the whole file argues
-  // against: a declared journey that has not demonstrated it can be green.
-  assert.deepEqual([...IMPLEMENTED_IDS].sort(), ['BJ-ACC-01', 'BJ-ACC-02', 'BJ-ACC-03', 'BJ-XS-10'])
+test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
+  // Every one of these was run in Chromium against the estate before it was added. A scenario in
+  // this list that has never been driven is the thing the whole file argues against: a declared
+  // journey that has not demonstrated it can be green — or, for the two below that are RED on this
+  // estate, that it goes red for a reason in the product rather than in itself.
+  //
+  // ── BJ-FOR-01 AND BJ-FOR-06 ARE DECLARED AND FAILING, ON PURPOSE ──────────────────────────────
+  // Both open a market at its own address, and on this estate that address is broken: the gateway
+  // splits `foresight.<apex>/markets/:id` between the bundle and the API on `Accept:
+  // application/json`, and the HTML carries no `Vary: Accept`, so the browser's HTTP cache answers
+  // the bundle's own JSON fetch with the page it just navigated to. Isolated in Chromium — see the
+  // header of `marketPageOrder`. Beacon's rule 1 is that an assertion failure means the PRODUCT is
+  // broken; it is, and withdrawing the journey until somebody fixes it is how a gap becomes
+  // invisible.
+  assert.deepEqual([...IMPLEMENTED_IDS].sort(), [
+    'BJ-ACC-01',
+    'BJ-ACC-02',
+    'BJ-ACC-03',
+    'BJ-FOR-01',
+    'BJ-FOR-06',
+    'BJ-FOR-13',
+    'BJ-FOR-14',
+    'BJ-FOR-17',
+    'BJ-XS-10',
+  ])
 })
 
 test('join() does not produce //register or accountregister', () => {

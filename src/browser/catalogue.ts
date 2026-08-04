@@ -224,6 +224,7 @@ const I = 'I — Aetherholm'
 const L = 'L — the developer platform'
 const M = 'M — the operator console'
 const N = 'N — Forge Network: the site, the faucet, the explorer'
+const J = 'J — Forge Foresight, the player surface'
 const Q = 'Q — community and governance'
 const R = 'R — cross-surface journeys'
 const S = 'S — the adversarial matrix'
@@ -319,6 +320,36 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   scenario('BJ-NET-18', N, 'Reorgs render with their depth; a chain behind its tip states the lag', 'presentation', ['explorer', 'indexer'], {}),
   scenario('BJ-NET-20', N, 'Token supply and authorities are as the contract reports them, not as an order claims', 'presentation', ['explorer', 'indexer'], {}),
   scenario('BJ-NET-21', N, 'A block page renders height, hash and the transactions in it', 'presentation', ['explorer', 'indexer'], {}),
+
+  /* ---- group J — Forge Foresight
+   *
+   * ══════════════════════════════════════════════════════════════════════════════════════════
+   * **DOC 22 TIERS FOUR OF THESE AT T1/T2. THEY ARE HERE, AND THE REASON IS NOT CONVENIENCE.**
+   *
+   * §4 puts a scenario at T1 when it needs "nothing but the bundle, a browser, and stubbed
+   * responses", and at T2 when it needs the bundle plus its own API. Both tiers were to live in
+   * `foresight-web/test/`. Two facts have made that placement wrong for these rows specifically:
+   *
+   *   1. **No frontend repository in this estate has a browser.** §1 records it and it is still
+   *      true — every `*-web/package.json` runs `node --test` over stubs, and `hub-web/test/
+   *      browser-stubs.ts:1-9` states the position: "There is no DOM in this suite on purpose."
+   *      A T2 row placed there is a row nobody runs.
+   *   2. **These four are only worth anything against a live chain.** Foresight's whole design is
+   *      that the page renders a MIRROR and the contract is the record — so "the page showed 0.3
+   *      EMBER" is satisfied by a mirror that drifted, and the assertion that matters is against
+   *      `ForesightMarket`'s storage. A stub cannot hold that, by construction.
+   *
+   * So the tier doc 22 assigns is recorded in each row's title and the scenario lives where it can
+   * actually run. This is not licence to move T1 rows here wholesale: a scenario that needs a
+   * STUBBED response — a failed tile, a 503, a reorg — still cannot be written in this tier at all,
+   * because it intercepts nothing, and those stay in doc 22 §8.8's gap rather than moving.
+   * ══════════════════════════════════════════════════════════════════════════════════════════
+   */
+  scenario('BJ-FOR-01', J, 'Open one market: the terms are above the pool, in document order', 'presentation', ['foresight'], { gate: true }),
+  scenario('BJ-FOR-06', J, 'The pool on screen is the pool the contract holds, to the wei', 'presentation', ['foresight', 'chain'], {}),
+  scenario('BJ-FOR-13', J, 'The filter set offered is exactly the lifecycle states the service uses', 'presentation', ['foresight'], {}),
+  scenario('BJ-FOR-14', J, 'Portfolio by address: every figure equals the contract’s own storage', 'presentation', ['foresight', 'chain'], { gate: true }),
+  scenario('BJ-FOR-17', J, 'The refusal list renders with no account, and no request carries a credential', 'client-request', ['foresight'], { gate: true }),
 
   /* ---- group Q */
   scenario('BJ-COM-01', Q, 'Found a token-gated community: the treasury accounts are visible after creation', 'presentation', ['community', 'ledger'], { blocked: NO_COMMUNITY_UI }),
