@@ -303,8 +303,20 @@ test('the manifest covers the sixteen surfaces the estate serves, each exactly o
   assert.equal(SMOKE_SURFACES.length, 16)
   const keys = SMOKE_SURFACES.map((s) => s.key)
   assert.equal(new Set(keys).size, keys.length, 'a surface is listed twice')
+
+  // IDENTITY IS HOST PLUS PATH, not host alone. It was host alone while every surface was its own
+  // bundle on its own subdomain; folding the Foresight operator panel into `admin` as a nested
+  // route made that false — `admin` and `admin-foresight` share a hostname on purpose and differ
+  // by path. Asserting on the pair keeps what this check was actually for (two surfaces silently
+  // aimed at one address) without forbidding the arrangement that is now correct.
+  const addresses = SMOKE_SURFACES.map(
+    (s) => `${s.subdomain === '' ? '' : s.subdomain + '.'}example.test${s.path}`,
+  )
+  assert.equal(new Set(addresses).size, addresses.length, 'two surfaces resolve to one address')
+
+  // And the pin list is per HOST, so it dedupes.
   const hosts = smokeHosts('example.test')
-  assert.equal(new Set(hosts).size, hosts.length, 'two surfaces resolve to one hostname')
+  assert.equal(new Set(hosts).size, hosts.length, 'collectPins would pin one host twice')
 })
 
 test('the apex surface is the apex, not a subdomain of it', () => {

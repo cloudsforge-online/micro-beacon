@@ -283,14 +283,20 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
     renders: [/Foresight/i],
   },
   {
-    key: 'foresight-admin',
-    subdomain: 'foresight-admin',
-    path: '/',
-    // Deliberately NOT 'shows-the-account'. The cross-origin session handoff to this console was
-    // observed to work on one run and not on the next, and an assertion that is sometimes right is
-    // worse than none: it teaches people to re-run. Its real defects — 404s on the ideas and
-    // categories routes — are caught by the network assertion, which is not ambiguous.
-    session: 'does-not-have-to',
+    // FOLDED INTO admin. `foresight-admin.<apex>` no longer exists — the panel is a nested route
+    // inside the operator console (`admin-web/src/app.tsx`, `path="foresight"`, index = the queue),
+    // and this entry would otherwise probe a hostname nothing serves and fail the release gate.
+    key: 'admin-foresight',
+    subdomain: 'admin',
+    path: '/foresight',
+    // NOW 'shows-the-account', where the old entry deliberately refused to require a session.
+    // Its reason was specific and is gone: the cross-origin handoff to a separate console "was
+    // observed to work on one run and not on the next", and an assertion that is sometimes right
+    // teaches people to re-run. There is no handoff any more — this is the same origin as the rest
+    // of the console, reached behind the same `ProtectedRoute`. So the stronger assertion is now
+    // the honest one, and it matches the `admin` entry above: an operator surface that renders
+    // while signed out is either broken or a hole.
+    session: 'shows-the-account',
     renders: [/Idea queue/i, /Markets/i],
   },
   {
@@ -340,9 +346,15 @@ export function surfaceUrl(apex: string, surface: SmokeSurface): string {
   return `https://${host}${surface.path.startsWith('/') ? surface.path : `/${surface.path}`}`
 }
 
-/** Every hostname the suite will speak TLS to, for `collectPins`. */
+/**
+ * Every hostname the suite will speak TLS to, for `collectPins`. DEDUPED, because a hostname can
+ * now carry more than one surface: the Foresight operator panel was folded into `admin` as a
+ * nested route, so `admin` and `admin-foresight` are two surfaces on one host. A certificate
+ * belongs to the host, not to the section, so pinning it twice would just do the work twice.
+ */
 export function smokeHosts(apex: string): readonly string[] {
-  return SMOKE_SURFACES.map((s) => (s.subdomain === '' ? apex : `${s.subdomain}.${apex}`))
+  const hosts = SMOKE_SURFACES.map((s) => (s.subdomain === '' ? apex : `${s.subdomain}.${apex}`))
+  return [...new Set(hosts)]
 }
 
 /* ------------------------------------------------------------------ what a page did */

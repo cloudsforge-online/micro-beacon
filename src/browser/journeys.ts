@@ -100,7 +100,10 @@ export const SURFACE_KEYS: readonly string[] = [
   'explorer',
   'developers',
   'foresight',
-  'foresight-admin',
+  // `foresight-admin` was here until the operator panel was folded into `admin` as a nested route.
+  // Removed rather than left as a harmless string: this list is what a scenario resolves a surface
+  // name against, so keeping it would let a scenario declare a dependency on a bundle that no
+  // longer exists and be told it resolved.
   'emberkin',
   'aetherholm',
   'site',
