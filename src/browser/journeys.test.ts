@@ -151,6 +151,9 @@ test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
     'BJ-FOR-13',
     'BJ-FOR-14',
     'BJ-FOR-17',
+    'BJ-WAL-01',
+    'BJ-WAL-08',
+    'BJ-WAL-09',
     'BJ-XS-10',
   ])
 })

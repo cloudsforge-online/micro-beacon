@@ -77,6 +77,8 @@ import {
 } from './driver.ts'
 import { T3_SCENARIOS, type Scenario } from './catalogue.ts'
 import { FORESIGHT_IMPLEMENTATIONS } from './foresightjourneys.ts'
+import { WALLET_IMPLEMENTATIONS } from './walletjourneys.ts'
+import type { Operator } from './fixtures.ts'
 
 /**
  * The fifteen surface keys, and nothing else about them.
@@ -203,7 +205,23 @@ export function surfaceJourney(options: SurfaceJourneyOptions): JourneyDefinitio
 
 /* ------------------------------------------------------------------ the implementations */
 
-type Implementation = (config: BrowserConfig, scenario: Scenario) => JourneyDefinition
+/**
+ * ── THE THIRD ARGUMENT IS THE ESTATE OPERATOR'S CREDENTIAL, AND IT IS ALWAYS NULLABLE ─────────
+ *
+ * A money journey has to put a balance on an account before it can assert anything about one,
+ * and identity refuses `POST /service-tokens` to an ordinary account (403) — which
+ * `deploy/scripts/estate-verify.sh:121-123` records as the deliberate gap it is. So seeding needs
+ * a credential that is configuration, never a default.
+ *
+ * `null` is the ordinary case and is handled by SKIPPING with the variable named, not by falling
+ * back to an empty account: "the page showed nothing and the ledger holds nothing" is a check
+ * that cannot fail. Every implementation that does not need one simply ignores the argument.
+ */
+type Implementation = (
+  config: BrowserConfig,
+  scenario: Scenario,
+  operator: Operator | null,
+) => JourneyDefinition
 
 /**
  * Join a configured base with a path, without producing `…/accountregister` or `…//register`.
@@ -571,6 +589,7 @@ const IMPLEMENTATIONS: Readonly<Record<string, Implementation>> = {
   // apparatus — a ledger oracle, an `eth_call` client and a set of fixtures — and folding six
   // hundred lines of it into the registry would bury the four above. The registry stays one map.
   ...FORESIGHT_IMPLEMENTATIONS,
+  ...WALLET_IMPLEMENTATIONS,
 }
 
 /* ------------------------------------------------------------------ the declaration */
@@ -579,6 +598,13 @@ export interface BrowserRegistryOptions {
   readonly config: BrowserConfig
   /** The names `BEACON_TARGETS` resolves. A surface without one cannot be pointed at. */
   readonly targets: ReadonlySet<string>
+  /**
+   * The estate credential that can mint a service token, or `null`.
+   *
+   * Only the money journeys use it, and they skip loudly without it rather than asserting against
+   * an account with nothing in it. See `Implementation`.
+   */
+  readonly operator?: Operator | null
 }
 
 /**
@@ -594,7 +620,7 @@ export function browserJourneys(options: BrowserRegistryOptions): readonly Journ
     const implementation = IMPLEMENTATIONS[scenario.id]
     if (!implementation) continue
     if (!scenario.needs.every((need) => options.targets.has(need))) continue
-    out.push(implementation(options.config, scenario))
+    out.push(implementation(options.config, scenario, options.operator ?? null))
   }
   return out
 }

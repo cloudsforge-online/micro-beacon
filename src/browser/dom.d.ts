@@ -36,6 +36,13 @@ interface HTMLInputElement {
 /** BJ-XS-10 clicks the switcher's trigger, because its entries do not exist until it is open. */
 interface HTMLButtonElement {
   click(): void
+  /** BJ-WAL-09 finds Confirm by its accessible name, per doc 22 §2.4: never by class or DOM path. */
+  readonly textContent: string | null
+}
+
+/** BJ-WAL-08 reads which asset the Send form has selected, so it can price it off the API. */
+interface HTMLSelectElement {
+  readonly value: string
 }
 
 /** BJ-ACC-02 reads the refusal banner's text. `innerText`, so hidden nodes do not count. */

@@ -139,11 +139,53 @@ export interface Scenario {
  * because of them.
  */
 
-const NO_WALLET_WRITE: Blocker = {
+/*
+ * ── A FOURTH BLOCKER IS GONE, AND IT WAS THE LARGEST ONE IN THE CATALOGUE ───────────────────
+ *
+ * `NO_WALLET_WRITE` stood here and blocked eleven of the rows below, and doc 22 §8.2 blocked six
+ * more outside this file (BJ-ADV-20, BJ-ADV-21, BJ-A11Y-13, BJ-A11Y-14, BJ-XS-03 and the receive
+ * pair). Its premise was: "hub-web's wallet page contains no form, no button, no onClick and no
+ * mutation — it reads three tiles of /v1/dashboard."
+ *
+ * That premise is false, and the way it survived is worth recording because it will happen again.
+ * A grep of `hub-web/src/pages/wallet.tsx` STILL finds no form and no button: the page was
+ * refactored and its three mutations moved beside it into `hub-web/src/components/send.tsx`,
+ * `receive.tsx` and `keyexport.tsx`. The claim was checked against the file it named rather than
+ * against the screen, and the screen had changed.
+ *
+ * Driven in Chromium against the running estate before this was removed: `hub.<apex>/wallet`,
+ * signed in, renders a Send panel with `#send-asset`, `#send-destination`, `#send-amount` and a
+ * Review button; a confirmation step carrying `[data-testid=confirm-destination]`; a Receive panel
+ * offering a deposit address; and a key-export panel. `walletjourneys.ts` drives all of it.
+ *
+ * Removing a blocker does NOT declare a journey — it moves a scenario from "cannot be written" to
+ * "not written yet", which `unimplemented()` names one line at a time. Nothing goes green because
+ * of this.
+ *
+ * What is NOT unblocked, and stays blocked with its own reason: the ceremony rows that need a
+ * SECOND factor (`NO_MFA_UI`, still true — `hub-web/src/pages/security.tsx` renders "No second
+ * factor is enrolled" and offers no enrolment, no recovery-code issue and no factor removal), and
+ * the two reorg fixtures of doc 22 §8.8 which no estate can produce on demand.
+ */
+
+const NO_SETTLEABLE_ASSET: Blocker = {
   reason:
-    'there is no wallet write surface anywhere. hub-web’s wallet page contains no form, no ' +
-    'button, no onClick and no mutation — it reads three tiles of /v1/dashboard. Send, receive, ' +
-    'key export and external-wallet connection have no UI to drive.',
+    'no asset in this estate can be withdrawn, so a send cannot be carried to settlement. ' +
+    'micro-wallet quotes the network fee inside POST /v1/withdrawals and refuses rather than ' +
+    'guessing when none is configured; WALLET_FEE_QUOTES appears nowhere in ' +
+    'deploy/compose/docker-compose.estate.yml. Driven: EMBER answers 400 fee_unavailable and ' +
+    'SHARD answers 400 not_withdrawable. The client-request half of the send flow IS runnable and ' +
+    'is BJ-WAL-08; these are the rows that need a withdrawal to reach a state machine.',
+  doc: '22 §8.2',
+}
+
+const NO_POLICY_ON_WITHDRAWAL: Blocker = {
+  reason:
+    'the withdrawal path consults no policy service, so there is no deny, challenge or review to ' +
+    'render. grep policy over wallet/src/withdrawals.ts finds nothing, and the refusals it can ' +
+    'produce are withdrawals_disabled, not_withdrawable, invalid_amount, fee_unavailable, ' +
+    'amount_too_small and the ledger’s insufficient-funds. hub-web/src/components/send.tsx ' +
+    'records the same finding: a limit panel here would be a screen for a decision nothing makes.',
   doc: '22 §8.2',
 }
 
@@ -151,6 +193,25 @@ const NO_MFA_UI: Blocker = {
   reason:
     'micro-identity serves six MFA routes and hub-web renders mfaEnabled as a fact while offering ' +
     'no enrolment, no recovery-code issue and no factor removal.',
+  doc: '22 §8.2',
+}
+
+const NO_CUSTODY_ADDRESS: Blocker = {
+  reason:
+    'micro-custody refuses to mint a deposit address for this estate, so no managed wallet and no ' +
+    'exportable key can exist for a journey to drive. Driven: POST /v1/deposits on micro-wallet ' +
+    'answers 500 and the wallet log records CustodyRefusedError on POST http://custody:4000/' +
+    'v1/addresses → 400. The receive panel and the export ceremony both render; neither has a ' +
+    'wallet to act on. This is an estate configuration gap, not a missing screen.',
+  doc: '22 §8.2',
+}
+
+const NO_SIGNER: Blocker = {
+  reason:
+    'there is no signer in any CloudsForge bundle, so a challenge cannot be signed and an external ' +
+    'wallet cannot be verified. hub-web says so on the page itself: "Forge Hub cannot ask a ' +
+    'browser extension or a hardware wallet to sign anything — there is no signer in this ' +
+    'application — so the flow has no screen here." The wallet service serves both halves.',
   doc: '22 §8.2',
 }
 
@@ -243,16 +304,17 @@ export const T3_SCENARIOS: readonly Scenario[] = [
 
   /* ---- group B */
   scenario('BJ-WAL-01', B, 'Wallet page: one row per wallet, each matching the dashboard response', 'presentation', ['hub', 'hub-api', 'wallet', 'ledger'], { gate: true }),
-  scenario('BJ-WAL-08', B, 'Send: the destination confirmed is the destination submitted, fee shown first', 'client-request', ['hub', 'hub-api', 'wallet'], { blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-12', B, 'Send: a policy deny is rendered as a reason, a limit and a route to raise it', 'presentation', ['hub', 'policy', 'wallet'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-13', B, 'Send: a policy challenge prompts MFA inline and continues', 'presentation', ['hub', 'policy', 'identity'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-14', B, 'Send: a policy review is shown as queued with a turnaround, not as failed', 'presentation', ['hub', 'policy'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-15', B, 'Send: retrying a stuck withdrawal twice produces one in-flight outbound', 'client-request', ['hub', 'wallet'], { blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-16', B, 'Receive: the address rendered is the address in the response', 'presentation', ['hub', 'wallet', 'custody'], { blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-18', B, 'Key export ceremony, all ten stages, each refused until the previous completed', 'presentation', ['hub', 'custody', 'identity'], { gate: true, outcome: 'refusal', ownedBy: 'custody/src/server.test.ts', blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-19', B, 'Key export: cancel from the notification link needs no MFA, at any point', 'navigation', ['hub', 'custody', 'notify'], { blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-21', B, 'Connect an external wallet: the closed five authorisations, granted separately', 'client-request', ['hub', 'wallet'], { blocked: NO_WALLET_WRITE }),
-  scenario('BJ-WAL-22', B, 'An unverified external address is not offered as a withdrawal destination', 'presentation', ['hub', 'wallet'], { outcome: 'refusal', ownedBy: 'wallet/src/server.test.ts', blocked: NO_WALLET_WRITE }),
+  scenario('BJ-WAL-08', B, 'Send: the destination confirmed is the destination submitted, byte for byte', 'client-request', ['hub', 'hub-api', 'wallet', 'ledger', 'identity'], { gate: true, outcome: 'refusal', ownedBy: 'wallet/src/server.test.ts' }),
+  scenario('BJ-WAL-09', B, 'Send: double-clicking Confirm sends exactly one request, under one key', 'client-request', ['hub', 'hub-api', 'wallet', 'ledger', 'identity'], { outcome: 'refusal', ownedBy: 'wallet/src/server.test.ts' }),
+  scenario('BJ-WAL-12', B, 'Send: a policy deny is rendered as a reason, a limit and a route to raise it', 'presentation', ['hub', 'policy', 'wallet'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_POLICY_ON_WITHDRAWAL }),
+  scenario('BJ-WAL-13', B, 'Send: a policy challenge prompts MFA inline and continues', 'presentation', ['hub', 'policy', 'identity'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_MFA_UI }),
+  scenario('BJ-WAL-14', B, 'Send: a policy review is shown as queued with a turnaround, not as failed', 'presentation', ['hub', 'policy'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_POLICY_ON_WITHDRAWAL }),
+  scenario('BJ-WAL-15', B, 'Send: retrying a stuck withdrawal twice produces one in-flight outbound', 'client-request', ['hub', 'wallet'], { blocked: NO_SETTLEABLE_ASSET }),
+  scenario('BJ-WAL-16', B, 'Receive: the address rendered is the address in the response', 'presentation', ['hub', 'wallet', 'custody'], { blocked: NO_CUSTODY_ADDRESS }),
+  scenario('BJ-WAL-18', B, 'Key export ceremony, all ten stages, each refused until the previous completed', 'presentation', ['hub', 'custody', 'identity'], { gate: true, outcome: 'refusal', ownedBy: 'custody/src/server.test.ts', blocked: NO_CUSTODY_ADDRESS }),
+  scenario('BJ-WAL-19', B, 'Key export: cancel from the notification link needs no MFA, at any point', 'navigation', ['hub', 'custody', 'notify'], { blocked: NO_NOTIFY_UI }),
+  scenario('BJ-WAL-21', B, 'Connect an external wallet: the closed five authorisations, granted separately', 'client-request', ['hub', 'wallet'], { blocked: NO_SIGNER }),
+  scenario('BJ-WAL-22', B, 'An unverified external address is not offered as a withdrawal destination', 'presentation', ['hub', 'wallet'], { outcome: 'refusal', ownedBy: 'wallet/src/server.test.ts', blocked: NO_SIGNER }),
 
   /* ---- group C */
   scenario('BJ-DSH-01', C, 'Hub overview with every upstream healthy: eleven tiles, total equals the sum', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing', 'wallet', 'activity', 'billing'], { gate: true }),
@@ -363,7 +425,7 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   /* ---- group R */
   scenario('BJ-XS-01', R, 'One account signs into everything, once: Hub → Worlds → Market, no second prompt', 'presentation', ['account', 'identity', 'hub', 'hub-api', 'worlds', 'market'], { gate: true }),
   scenario('BJ-XS-02', R, 'The profile created at registration renders in Market, Worlds and Community', 'presentation', ['account', 'identity', 'market', 'worlds', 'community'], { blocked: NO_COMMUNITY_UI }),
-  scenario('BJ-XS-03', R, 'The wallet is the same screen at the same address from Worlds, Trade and Create', 'navigation', ['hub', 'worlds', 'trade', 'create'], { blocked: NO_WALLET_WRITE }),
+  scenario('BJ-XS-03', R, 'The wallet is the same screen at the same address from Worlds, Trade and Create', 'navigation', ['hub', 'worlds', 'trade', 'create'], {}),
   scenario('BJ-XS-04', R, 'The total on Hub overview and on Hub portfolio are equal and share a pricedAt', 'presentation', ['hub', 'hub-api', 'ledger', 'pricing'], { gate: true }),
   scenario('BJ-XS-05', R, 'Act in three products, then see all three in one feed with six originating services', 'presentation', ['hub', 'hub-api', 'activity'], { gate: true }),
   scenario('BJ-XS-06', R, 'Earn a reward in a world, spend it in Market, see both legs on one timeline', 'presentation', ['worlds', 'market', 'hub-api', 'activity'], { blocked: NO_WORLD_CLIENT }),

@@ -98,10 +98,20 @@ test('a blocked scenario cites the section of doc 22 that records the blocker', 
 })
 
 test('THE UNBLOCKED SET IS PINNED, BECAUSE REMOVING A BLOCKER IS A CLAIM ABOUT THE ESTATE', () => {
-  // This list was six, then fifty-six, and is now sixty-one: five Forge Foresight rows were
-  // added when the tier gained a chain client and could assert against `ForesightMarket`'s own
-  // storage rather than against the mirror the page renders. Doc 22 tiers four of them at
-  // T1/T2; see the note above group J in catalogue.ts for why they are here.
+  // This list was six, then fifty-six, and is now sixty-four. Two changes, both of which are
+  // claims about the estate rather than about this file:
+  //
+  //   * Five Forge Foresight rows, added when the tier gained a chain client and could assert
+  //     against `ForesightMarket`'s own storage rather than the mirror the page renders.
+  //   * THREE WALLET ROWS, because `NO_WALLET_WRITE` — the largest blocker in the catalogue —
+  //     was disproved by driving it. hub-web serves a Send form, a Receive panel and a key
+  //     export panel; the claim survived because it was checked against `wallet.tsx`, which
+  //     still has no button, rather than against the screen, which does. BJ-WAL-08 and
+  //     BJ-WAL-09 are now implemented; BJ-XS-03 is unblocked and not yet written.
+  //
+  // The rows that stay blocked moved to blockers naming what was actually found: no fee is
+  // configured for any asset, custody refuses to mint an address, there is no signer in any
+  // bundle, and the withdrawal path consults no policy service. Each was driven.
   //
   // This list was six. It is now sixty-one, because three blockers were removed after being disproved
   // in Chromium against the running estate — see the note above `NO_WALLET_WRITE` in catalogue.ts
@@ -120,7 +130,8 @@ test('THE UNBLOCKED SET IS PINNED, BECAUSE REMOVING A BLOCKER IS A CLAIM ABOUT T
     'BJ-MKT-12', 'BJ-NET-09', 'BJ-NET-14', 'BJ-NET-18', 'BJ-NET-20', 'BJ-NET-21',
     'BJ-TRD-02', 'BJ-TRD-03', 'BJ-TRD-04', 'BJ-TRD-06', 'BJ-TRD-12', 'BJ-TRD-13',
     'BJ-FOR-01', 'BJ-FOR-06', 'BJ-FOR-13', 'BJ-FOR-14', 'BJ-FOR-17',
-    'BJ-WAL-01', 'BJ-WLD-05', 'BJ-XS-01', 'BJ-XS-04', 'BJ-XS-05', 'BJ-XS-10',
+    'BJ-WAL-01', 'BJ-WAL-08', 'BJ-WAL-09', 'BJ-WLD-05', 'BJ-XS-01', 'BJ-XS-03',
+    'BJ-XS-04', 'BJ-XS-05', 'BJ-XS-10',
     'BJ-XS-13', 'BJ-XS-14',
   ].sort())
 })

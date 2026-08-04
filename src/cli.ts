@@ -65,6 +65,9 @@ beacon browser [--targets <name=url,...>] [--browser <path>] [--estate-ca <file>
                 pinned, and only a private root earns a pin.
   --timeout     per-operation timeout in ms. Default 30000.
 
+  BEACON_ESTATE_OPERATOR / _PASSWORD name an account that can mint a service token. The money
+  journeys need one to seed a balance before they assert one; without it they skip, naming it.
+
   --insecure-tls is GONE. It set NODE_TLS_REJECT_UNAUTHORIZED=0 and ignoreHTTPSErrors together
   — every host, every error, for the whole run — in the command whose job is to notice.
 
@@ -376,7 +379,27 @@ export async function runBrowser(args: BrowserArgs): Promise<0 | 1 | 2> {
     timeoutMs: args.timeoutMs,
     certificatePins: [...spki].sort(),
   }
-  const registry = { config, targets: new Set(targets.keys()) }
+  // ── THE OPERATOR CREDENTIAL, AND WHY ITS ABSENCE IS A SKIP RATHER THAN A DEFAULT ────────────
+  //
+  // The money journeys seed a balance before they assert one, and identity refuses
+  // `POST /service-tokens` to an ordinary account (403). So they need the estate operator's
+  // credential — which is configuration, is never defaulted, and whose absence makes them SKIP
+  // with the variable named rather than fall back to asserting against an empty account. A skip is
+  // an exit 1 here, so a pipeline cannot read the absence as a green.
+  const operatorIdentifier = process.env['BEACON_ESTATE_OPERATOR'] ?? ''
+  const operatorPassword = process.env['BEACON_ESTATE_OPERATOR_PASSWORD'] ?? ''
+  const operator =
+    operatorIdentifier !== '' && operatorPassword !== ''
+      ? { identifier: operatorIdentifier, password: operatorPassword }
+      : null
+  if (operator === null) {
+    stdout.write(
+      'no BEACON_ESTATE_OPERATOR / _PASSWORD set — every journey that has to seed a balance will\n' +
+        'skip, and a skip blocks.\n\n',
+    )
+  }
+
+  const registry = { config, targets: new Set(targets.keys()), operator }
   const declared = browserJourneys(registry)
 
   if (declared.length === 0) {
