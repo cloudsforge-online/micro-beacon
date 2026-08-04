@@ -8,10 +8,32 @@
  * The estate shipped green — 44 healthy containers, CI green in 58 repositories, 314 browser
  * scenarios specified — and when a human opened it in a browser, sign-in failed, the Forge Worlds
  * registry failed, Foresight was blank and Forge Trade rendered unstyled. Every test passed
- * through all of it, and the reason is one line repeated in every frontend's journey helper
- * (`site/test/journeys/browser.ts:342` and its equivalents):
+ * through all of it, and the reason is one line repeated in every frontend's journey helper — in
+ * `site/test/journeys/browser.ts`, inside `renderOnlyWithStubbedNetwork`, and in its equivalents
+ * across the other frontends:
  *
  *     await page.route('**\/*', async (route) => { … route.fulfill({ … }) })
+ *
+ * ── CITED BY NAME RATHER THAN BY LINE NUMBER, DELIBERATELY ─────────────────────────────────────
+ *
+ * That citation said `browser.ts:342` and the line had moved to 419: the helper was renamed to
+ * `renderOnlyWithStubbedNetwork` across six repositories and given a long header, and the number
+ * rotted in silence. It was, as far as anyone could find, the only line-numbered citation into
+ * that file anywhere in the estate, and beacon has no citations test — so nothing would have
+ * noticed the next drift either.
+ *
+ * A check was considered and refused, and the refusal is the point rather than laziness.
+ * `micro-aetherholm-web` checks out its sibling service purely so every route citation is verified
+ * against the line it names, and `micro-conformance` and several frontends do the same — that
+ * machinery is worth its cost where dozens of citations pin a contract. Here it is ONE, and the
+ * check would need a `micro-site` checkout beside this one. Beacon's CI has none, so the test
+ * would either fail for the wrong reason or SKIP — and a skip that reads as a pass is precisely
+ * what `journeys.ts` rule 2 exists to refuse. Buying a citation check with a new green-when-not-run
+ * is a bad trade in the repository that made that argument.
+ *
+ * So it is anchored on the two things that do not move: the exported function's NAME, and the call
+ * itself. Both are greppable, and this file's own `smoke.test.ts` already asserts the same call
+ * text is absent from *this* tier — so the string is load-bearing on both sides.
  *
  * It launches a real browser, renders the real bundle, and then **intercepts every network request
  * and answers it from a fixture**. What it proves is "this app renders correctly when its API
@@ -74,6 +96,7 @@ import {
   assertClean,
   assertRendered,
   isObservabilitySink,
+  unexpectedConsoleErrors,
   type BrowserConfig,
   type BrowserPage,
   type Collected,
@@ -101,6 +124,47 @@ export interface SmokeSurface {
    * hostname to this product, rather than to whichever bundle answers first.
    */
   readonly renders: readonly RegExp[]
+  /**
+   * Exchanges on THIS surface's own origin where a 4xx is the contract rather than a defect.
+   *
+   * See `ContractualEmpty`. Absent on fifteen of the sixteen surfaces, and that is the number to
+   * watch: every entry here is a check this tier has agreed not to make.
+   */
+  readonly contractual?: readonly ContractualEmpty[]
+}
+
+/**
+ * A status this surface's own API answers **by design**, on a named path.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE DANGER IS NOT THIS ENTRY. IT IS THE SECOND ONE, AND THE FIFTH.**
+ *
+ * A smoke tier that learns to shrug at 404s is worth nothing — a 404 is exactly how the two
+ * gateway defects this tier found tonight presented. So the shape of the allowance is doing all
+ * the work, and it is deliberately the most awkward one available:
+ *
+ *   * **One exact path**, never a prefix and never a pattern. `/v1/saves/me` is allowed;
+ *     `/v1/saves/*` is not expressible.
+ *   * **One exact status.** A 404 that becomes a 500 is a new fact and goes red.
+ *   * **This surface's own host only.** `checkSurface` fills the host in from the observed page
+ *     origin, so an allowance written for emberkin cannot excuse the same path on nimbus or on
+ *     the gateway.
+ *   * **A `why` that names the line of source it is derived from**, so a reviewer can check the
+ *     claim rather than take it, and so an entry that has stopped being true reads as stale.
+ *
+ * What is NOT expressible here is the thing that would matter: there is no way to say "ignore
+ * 404s on this surface", and no way to say "ignore 404s". If a second entry ever appears, the
+ * question to ask is not whether it is correct — it will be — but whether the tier is being
+ * gradually taught not to look.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export interface ContractualEmpty {
+  /** Exact pathname, as the service routes it. */
+  readonly path: string
+  /** The status the SERVICE documents for the empty case. */
+  readonly status: number
+  /** Why this is the contract, citing the source that says so. Printed on nothing; read by people. */
+  readonly why: string
 }
 
 /**
@@ -217,6 +281,24 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
     path: '/',
     session: 'does-not-have-to',
     renders: [/Emberkin|Warden|Kin/i, /Dex/i],
+    // The ONE allowance in this file, and it was checked on both sides rather than taken from a
+    // report. Read `ContractualEmpty` before adding a second.
+    contractual: [
+      {
+        path: '/v1/saves/me',
+        status: 404,
+        why:
+          'a player who has never started a game HAS no save, and the service says so with a 404: ' +
+          '`emberkin/src/server.ts:340` returns `not_found` "no save for this account". The client ' +
+          'already treats it as the ordinary first visit — `emberkin-web/src/lib/emberkin.ts:205` ' +
+          'catches exactly this and returns `null` so the title screen renders — and its own ' +
+          'comment draws the line this allowance copies: "every OTHER 404 from this base would be ' +
+          'a routing bug and is still thrown". The smoke tier sees a failed request and cannot ' +
+          'tell 404-as-empty from 404-as-routing-bug, so it was calling a correct application ' +
+          'broken. The account this suite signs in as is an operator, not a player; it will never ' +
+          'have a save, so this is the state it observes on every run.',
+      },
+    ],
   },
   {
     key: 'aetherholm',
@@ -350,17 +432,48 @@ export function checkSurface(
     )
   }
 
-  // `assertClean` with NO expected failures. A smoke run has no refusal scenarios, so there is
-  // nothing legitimate for it to excuse, and passing an allowance here would be the beginning of
-  // the list that eventually contains the defect.
-  const clean = assertClean(observation.collected, observation.surfaceKey)
+  // ── THE ALLOWANCE LIST, AND THE HOST IT IS BOUND TO ────────────────────────────────────────
+  //
+  // This used to pass NO expected failures, with the note that "a smoke run has no refusal
+  // scenarios, so there is nothing legitimate for it to excuse". That was right about refusal
+  // scenarios and wrong about one thing: a surface whose API answers 4xx for the EMPTY case is not
+  // refusing anything, and the tier was reporting a correct application as broken. `emberkin`'s
+  // `/v1/saves/me` is the case, and the only one.
+  //
+  // The host is filled in HERE, from the page's own observed origin, rather than written into
+  // `SMOKE_SURFACES`. Two reasons and both matter: the surface list deliberately does not record
+  // the apex ("so that pointing this suite at staging is a variable rather than an edit"), and
+  // binding the allowance to the origin the browser actually loaded means it cannot excuse the
+  // same path on nimbus, on lantern or on the gateway — which is what a path-only allowance would
+  // have done across six hosts.
+  //
+  // A malformed observation URL yields NO allowances rather than unbound ones: if the origin
+  // cannot be established, neither can the narrowness, and the honest answer is to check
+  // everything.
+  let ownHost: string | null = null
+  try {
+    ownHost = new URL(observation.url).host
+  } catch {
+    ownHost = null
+  }
+  const expected =
+    ownHost === null
+      ? []
+      : (surface.contractual ?? []).map((c) => ({ path: c.path, status: c.status, host: ownHost }))
+  const clean = assertClean(observation.collected, observation.surfaceKey, expected)
   if (!clean.ok) at('nothing failed on the wire', clean.reason)
 
-  if (SMOKE_CONSOLE_IS_FATAL && observation.collected.consoleErrors.length > 0) {
+  // The SAME allowance, applied to the console. An excused 4xx produces two signals — a failed
+  // request and a `Failed to load resource … status of 404` line — and honouring one without the
+  // other leaves the surface red for the exchange that was just established to be correct. The
+  // suppression is bound to the same (host, path, status) triple, so it can never cover more here
+  // than it does on the wire, and a console line naming no resource is never touched.
+  const consoleErrors = unexpectedConsoleErrors(observation.collected.consoleErrors, expected)
+  if (SMOKE_CONSOLE_IS_FATAL && consoleErrors.length > 0) {
     at(
       'no console error',
-      `${observation.url} logged ${observation.collected.consoleErrors.length} console error(s): ` +
-        observation.collected.consoleErrors.slice(0, 3).join(' | '),
+      `${observation.url} logged ${consoleErrors.length} console error(s): ` +
+        consoleErrors.slice(0, 3).join(' | '),
     )
   }
 

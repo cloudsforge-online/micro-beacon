@@ -53,14 +53,20 @@ beacon gate --release <tag> [--url <base>] [--token <token>] [--json] [--record]
 
 exit codes: 0 promote · 1 refuse · 2 could not ask
 
-beacon browser [--targets <name=url,...>] [--browser <path>] [--insecure-tls] [--timeout <ms>]
+beacon browser [--targets <name=url,...>] [--browser <path>] [--estate-ca <file>] [--timeout <ms>]
 
-  --targets       the estate's addresses. Defaults to BEACON_TARGETS.
-  --browser       a Chromium executable. Defaults to BEACON_BROWSER_EXECUTABLE, then to the one
-                  playwright-core would use.
-  --insecure-tls  accept the certificate the gateway serves. Needed for a dev estate terminating
-                  on Traefik's self-signed default; NEVER for a real one.
-  --timeout       per-operation timeout in ms. Default 30000.
+  --targets     the estate's addresses. Defaults to BEACON_TARGETS.
+  --browser     a Chromium executable. Defaults to BEACON_BROWSER_EXECUTABLE, then to the one
+                playwright-core would use.
+  --estate-ca   a PEM root to trust, IN ADDITION to the system store, for beacon's own requests.
+                Defaults to BEACON_ESTATE_CA. Needed for a dev estate whose gateway terminates on
+                a private CA; every other host is still fully validated. Chromium's half needs no
+                flag: the certificate each target serves is inspected first and its public key
+                pinned, and only a private root earns a pin.
+  --timeout     per-operation timeout in ms. Default 30000.
+
+  --insecure-tls is GONE. It set NODE_TLS_REJECT_UNAUTHORIZED=0 and ignoreHTTPSErrors together
+  — every host, every error, for the whole run — in the command whose job is to notice.
 
 exit codes: 0 every declared journey passed · 1 one failed, errored or SKIPPED · 2 nothing
 was declared, or the arguments were wrong
@@ -210,9 +216,29 @@ async function viaDatabase(args: Args): Promise<GateDecision> {
 interface BrowserArgs {
   readonly targets: string
   readonly executablePath: string
-  readonly insecureTls: boolean
+  /**
+   * A PEM root to trust IN ADDITION to the system store, for beacon's own `fetch`.
+   *
+   * Replaces `insecureTls`, and the difference is the whole point: this names one certificate
+   * authority, in a file a reviewer can read, and leaves every other host validated.
+   */
+  readonly estateCa: string
   readonly timeoutMs: number
 }
+
+/**
+ * `--insecure-tls` is REFUSED BY NAME rather than falling through to "unknown argument".
+ *
+ * A bare parse error would print the usage and leave somebody guessing whether the flag was
+ * mistyped or removed, and the likeliest next move is to reach for NODE_TLS_REJECT_UNAUTHORIZED
+ * in the shell instead — which is the same defect, one level further from review.
+ */
+export const INSECURE_TLS_REMOVED =
+  '--insecure-tls has been removed. It switched off certificate validation for every host and\n' +
+  'every error at once, in the command whose purpose is to notice one. Chromium now pins the\n' +
+  "public key of whatever each target actually serves — and only a PRIVATE root earns a pin, so\n" +
+  'an expired certificate, one issued for another hostname, or a substituted one still fails.\n' +
+  "For beacon's own requests, name the root: --estate-ca <file> (or BEACON_ESTATE_CA).\n"
 
 export function parseBrowserArgs(
   args: readonly string[],
@@ -220,22 +246,23 @@ export function parseBrowserArgs(
 ): BrowserArgs | null {
   let targets = source['BEACON_TARGETS'] ?? ''
   let executablePath = source['BEACON_BROWSER_EXECUTABLE'] ?? ''
-  let insecureTls = false
+  let estateCa = source['BEACON_ESTATE_CA'] ?? ''
   let timeoutMs = 30_000
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
-    if (arg === '--insecure-tls') insecureTls = true
-    else if (arg === '--targets') targets = args[++i] ?? ''
+    if (arg === '--targets') targets = args[++i] ?? ''
     else if (arg === '--browser') executablePath = args[++i] ?? ''
+    else if (arg === '--estate-ca') estateCa = args[++i] ?? ''
     else if (arg === '--timeout') timeoutMs = Number(args[++i] ?? '')
     else if (arg?.startsWith('--targets=')) targets = arg.slice('--targets='.length)
     else if (arg?.startsWith('--browser=')) executablePath = arg.slice('--browser='.length)
+    else if (arg?.startsWith('--estate-ca=')) estateCa = arg.slice('--estate-ca='.length)
     else if (arg?.startsWith('--timeout=')) timeoutMs = Number(arg.slice('--timeout='.length))
     else return null
   }
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000) return null
-  return { targets, executablePath, insecureTls, timeoutMs }
+  return { targets, executablePath, estateCa, timeoutMs }
 }
 
 /**
@@ -266,6 +293,7 @@ export async function runBrowser(args: BrowserArgs): Promise<0 | 1 | 2> {
   const { parseTargets, TargetsError } = await import('./targets.ts')
   const { browserJourneys, undeclared } = await import('./browser/journeys.ts')
   const { runJourney } = await import('./journeys.ts')
+  const { collectPins, trustEstateCa } = await import('./browser/estatecert.ts')
 
   let targets: ReadonlyMap<string, string>
   try {
@@ -278,26 +306,75 @@ export async function runBrowser(args: BrowserArgs): Promise<0 | 1 | 2> {
     return 2
   }
 
-  // ────────────────────────────────────────────────────────────────────────────────────────────
-  // THE FLAG HAS TO REACH `fetch` TOO, AND THE FIRST VERSION OF THIS DID NOT.
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  // TWO KINDS OF REQUEST, ONE POLICY, AND NEITHER OF THEM STOPS CHECKING.
   //
-  // A browser journey makes TWO kinds of request: the browser's, and its own — BJ-XS-10 fetches
-  // each address the switcher offers, and BJ-ACC-02 seeds an account over HTTP. Telling Chromium
-  // to accept the gateway's self-signed certificate and leaving Node's fetch strict produced
-  // exactly the shape of failure this repository keeps finding: three of four journeys red with
-  // `TypeError: fetch failed`, which names neither TLS nor the certificate and reads as the estate
-  // being down. BJ-XS-10 got as far as reporting that `create.<apex>` does not answer. It does.
+  // A browser journey makes the browser's requests AND beacon's own — BJ-XS-10 fetches every
+  // address the switcher offers, BJ-ACC-02 seeds an account over HTTP — and this command used to
+  // reconcile the two by turning validation off on both sides at once:
+  // `NODE_TLS_REJECT_UNAUTHORIZED = '0'` plus `ignoreHTTPSErrors: true`. Every host, every error,
+  // for the whole run, in the command whose entire job is to notice one. `smoke` had already been
+  // given the narrow answer and this, the OLDER runner, never got it.
   //
-  // Process-wide, and only inside this command, which is a short-lived CLI that does nothing else.
-  // The SERVICE never takes this path: `runBrowser` is not reachable from `index.ts`.
-  // ────────────────────────────────────────────────────────────────────────────────────────────
-  if (args.insecureTls) process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0'
+  //   * Chromium: `collectPins` inspects the certificate each target really serves and pins the
+  //     public key — and ONLY where the failure is an unreachable root. An expired certificate, a
+  //     certificate for another hostname, a bad signature: refused a pin, still fail, still red.
+  //     `ignoreHttpsErrors` is not passed at all, so `driver.ts` defaults it to false.
+  //   * beacon's own `fetch`: one named root, from a file, added to the system store. See
+  //     `trustEstateCa` for why the certificate on the wire cannot supply it (the gateway sends a
+  //     chain of depth one, so there is no issuer to trust).
+  //
+  // Every reason is PRINTED. A pin nobody can see is a pin nobody reviews.
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  // ── ORDER MATTERS, AND GETTING IT WRONG MADE EVERY PAGE FAIL ────────────────────────────────
+  //
+  // The inspection runs FIRST, before the root is trusted, and that is not tidiness. `pinPolicy`
+  // asks OpenSSL's verdict — `socket.authorized` — and refuses a pin for anything already trusted,
+  // correctly: "nothing needs excusing". Trusting the estate CA first therefore makes every
+  // inspection report `trusted: true`, produces an EMPTY pin list, and hands Chromium nothing —
+  // and Chromium has its own trust store that `tls.setDefaultCACertificates` never touched. Run
+  // that way, every target failed `net::ERR_CERT_AUTHORITY_INVALID` while the log cheerfully said
+  // the certificates verified. Measured here, on this estate, before this comment was written.
+  //
+  // Two mechanisms, two trust stores, one decision — so the decision has to be taken while both
+  // are still in their original state.
+  //
+  // The HTTPS targets, grouped by port. `http:` targets are skipped rather than inspected: a TLS
+  // handshake against a plaintext port does not fail fast, it waits out the timeout, and five
+  // seconds per target of "no certificate to inspect" is noise in front of the reasons that
+  // matter. Grouped by port because `collectPins` inspects one port per call, and a target on a
+  // non-443 port is a different endpoint that must be looked at on its own terms.
+  const byPort = new Map<number, Set<string>>()
+  for (const url of targets.values()) {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') continue
+    const port = parsed.port === '' ? 443 : Number(parsed.port)
+    const set = byPort.get(port) ?? new Set<string>()
+    set.add(parsed.hostname)
+    byPort.set(port, set)
+  }
+  // Per host rather than once, for `collectPins`'s own reason: a host quietly serving a DIFFERENT
+  // certificate must not be excused by a pin taken from its neighbour.
+  const spki = new Set<string>()
+  for (const [port, hosts] of [...byPort].sort((a, b) => a[0] - b[0])) {
+    const pins = await collectPins([...hosts].sort(), { port })
+    for (const reason of pins.reasons) stdout.write(`tls  ${reason}\n`)
+    for (const key of pins.spki) spki.add(key)
+  }
+
+  // Now, and only now, the root beacon's own `fetch` needs. See the ordering note above.
+  const trust = trustEstateCa(args.estateCa ? [args.estateCa] : [])
+  if (!trust.ok) {
+    stderr.write(`${trust.why}\n`)
+    return 2
+  }
+  stdout.write(`tls  ${trust.why}\n\n`)
 
   const config = {
     enabled: true,
     executablePath: args.executablePath,
     timeoutMs: args.timeoutMs,
-    ignoreHttpsErrors: args.insecureTls,
+    certificatePins: [...spki].sort(),
   }
   const registry = { config, targets: new Set(targets.keys()) }
   const declared = browserJourneys(registry)
@@ -497,6 +574,12 @@ export async function main(argsIn: readonly string[]): Promise<0 | 1 | 2> {
   }
 
   if (command === 'browser') {
+    // Named before the generic parse failure, so a caller who still passes it is told what
+    // replaced it rather than being shown the usage and left to guess. See INSECURE_TLS_REMOVED.
+    if (rest.includes('--insecure-tls')) {
+      stderr.write(INSECURE_TLS_REMOVED)
+      return 2
+    }
     const browserArgs = parseBrowserArgs(rest, process.env)
     if (!browserArgs) {
       stderr.write(USAGE)

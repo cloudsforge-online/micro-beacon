@@ -45,11 +45,29 @@
  * pinning without these two checks would restore the blind spot for the one host that matters
  * most. Both are therefore established in this process, from the certificate itself, and an
  * offending certificate is refused a pin. It then fails in the browser, loudly, which is correct.
+ *
+ * ── THE ONE THING A PER-HOST REFUSAL CANNOT DO, MEASURED ────────────────────────────────────
+ *
+ * The refusals above are per HOST; the flag they feed is per KEY. This estate serves ONE leaf for
+ * every hostname, so when a suite visits sixteen surfaces and one of them is served a certificate
+ * that does not cover it, that host is correctly refused a pin — and Chromium loads it anyway,
+ * because a NEIGHBOUR contributed the same key and the flag excuses every error for it.
+ * Reproduced here: `deep.nested.<apex>` is refused a pin by name ("does not cover this hostname")
+ * and the page then loads regardless.
+ *
+ * That is a limit of Chromium's flag, which takes keys and not (key, host) pairs, and there is no
+ * narrower control available. It is bounded and worth stating precisely: the pin can only ever
+ * excuse a certificate the estate is ALREADY serving somewhere in the same run. A certificate
+ * signed by a different key — an expired one, a substituted one, a real man-in-the-middle — is
+ * refused a pin AND refused by the browser. Proved against a purpose-built expired self-signed
+ * certificate on a spare port: `collectPins` answered "expired … pinning it would hide an outage",
+ * the pin list came back empty, and `page.goto` failed `net::ERR_CERT_AUTHORITY_INVALID`.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
 
 import { X509Certificate, createHash } from 'node:crypto'
-import { connect } from 'node:tls'
+import { readFileSync } from 'node:fs'
+import { connect, getCACertificates, setDefaultCACertificates } from 'node:tls'
 
 /** What the gateway presented, reduced to the facts a pin decision turns on. */
 export interface CertificateFacts {
@@ -265,4 +283,92 @@ export async function collectPins(
     if (decision.pin) spki.add(decision.spkiSha256)
   }
   return { spki: [...spki].sort(), reasons }
+}
+
+/* ────────────────────────────────────────────────────────────────────────────────────────────
+ * THE OTHER HALF OF THE SAME PROBLEM: BEACON'S OWN `fetch`.
+ *
+ * A browser journey makes TWO kinds of request. Chromium's are handled above, by a pin. Beacon's
+ * own are not — BJ-XS-10 fetches every address the switcher offers and BJ-ACC-02 seeds an account
+ * over HTTP — and `cli.ts` used to reconcile the two with
+ *
+ *     process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0'
+ *
+ * which is `ignoreHTTPSErrors` again, one layer down and process-wide: every host, every error,
+ * for the whole run. The journeys reach the gateway AND `identity`, so with that set the suite
+ * would have reported green through an expired certificate, a certificate for the wrong hostname
+ * and an active man-in-the-middle — in the command whose job is to notice.
+ *
+ * There is no per-request TLS option on `fetch` and no dispatcher to swap without adding `undici`
+ * as a dependency, so the narrow move is to name ONE additional root and add it to the default
+ * trust store for this process. That is narrow in the way the SPKI pin is narrow: everything else
+ * on every other host is still fully validated by the same OpenSSL path as before, and a
+ * substituted certificate on the estate's own host still fails.
+ *
+ * ── WHY A FILE PATH RATHER THAN THE CERTIFICATE WE JUST INSPECTED ────────────────────────────
+ *
+ * `collectPins` gets away without one because a SPKI pin needs only the key it saw. A trust store
+ * needs a path to a root, and this gateway sends a chain of depth ONE — the leaf and nothing else
+ * — so there is no issuer on the wire to trust. Measured, not assumed: `getPeerCertificate(true)`
+ * against the running estate returns a single certificate whose `issuerCertificate` is itself.
+ * Trusting the leaf alone was tried first and OpenSSL still answers
+ * `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, because a leaf that is not self-signed is not a trust anchor.
+ *
+ * So the operator names the root. That is a deploy fact, exactly as `BEACON_TARGETS` is, and it
+ * has the property the old flag did not: it says WHICH certificate authority is being accepted,
+ * in a file somebody can read.
+ * ──────────────────────────────────────────────────────────────────────────────────────────── */
+
+export type TrustResult =
+  | { readonly ok: true; readonly why: string }
+  | { readonly ok: false; readonly why: string }
+
+/**
+ * Add one named root to this process's default trust store, for beacon's own `fetch`.
+ *
+ * Fails rather than degrading, in all three directions that matter:
+ *
+ *   * an unreadable path is an error, not a silent "carry on unverified";
+ *   * a file that is not a certificate is an error, checked by PARSING it rather than by looking
+ *     for a `-----BEGIN` line — a truncated PEM has the header and no key;
+ *   * a Node without `tls.setDefaultCACertificates` (added in Node 22.15) is an error naming the
+ *     version, because the alternative on such a runtime is the blanket switch this replaces.
+ *
+ * Idempotent in effect: the existing defaults are read back and re-set with the addition, so
+ * calling it twice trusts one extra root twice rather than discarding the system store.
+ */
+export function trustEstateCa(paths: readonly string[]): TrustResult {
+  if (paths.length === 0) return { ok: true, why: 'no additional root was named; the system trust store stands unmodified' }
+  if (typeof setDefaultCACertificates !== 'function' || typeof getCACertificates !== 'function') {
+    return {
+      ok: false,
+      why:
+        `this Node (${process.version}) has no tls.setDefaultCACertificates, which arrived in ` +
+        'v22.15 — upgrade it rather than reaching for NODE_TLS_REJECT_UNAUTHORIZED, which is the ' +
+        'blanket switch this option exists to replace',
+    }
+  }
+  const added: string[] = []
+  const pems: string[] = []
+  for (const file of paths) {
+    let pem: string
+    try {
+      pem = readFileSync(file, 'utf8')
+    } catch (err) {
+      return { ok: false, why: `cannot read the estate CA at ${file}: ${err instanceof Error ? err.message : String(err)}` }
+    }
+    let cert: X509Certificate
+    try {
+      cert = new X509Certificate(pem)
+    } catch (err) {
+      return { ok: false, why: `${file} is not a certificate: ${err instanceof Error ? err.message : String(err)}` }
+    }
+    pems.push(pem)
+    added.push(`${cert.subject.replace(/\n/g, ' ')} (until ${cert.validTo})`)
+  }
+  setDefaultCACertificates([...getCACertificates('default'), ...pems])
+  return {
+    ok: true,
+    why: `trusting ${added.length} additional root(s) for this process only: ${added.join('; ')}`,
+  }
 }

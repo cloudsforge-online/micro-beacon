@@ -327,13 +327,48 @@ export function assertRendered(text: string, collected: Collected, where: string
 }
 
 /**
- * Did the page get through the load without breaking?
+ * The resource a collected console error names, or null.
  *
- * Console errors are collected and reported but are **not** fatal on their own, for the reason the
- * frozen helper gives: third-party widgets and browser extensions produce them, and a journey that
- * fails on any `console.error` is a journey that fails for ever for reasons nobody owns. An
- * uncaught exception and a failed request are different — both are the page not working.
+ * The ` @ <url>` suffix `attach` appends. Split from the RIGHT and parsed as a URL, so a message
+ * whose own text contains ` @ ` — an email address in a validation error, say — cannot be mistaken
+ * for a location.
  */
+export function consoleErrorResource(line: string): URL | null {
+  const at = line.lastIndexOf(' @ ')
+  if (at === -1) return null
+  try {
+    return new URL(line.slice(at + 3))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Console errors that are not the paired report of an already-excused exchange.
+ *
+ * Exact on all three of host, path and status — the same triple `isExpected` uses, so an allowance
+ * can never suppress more in the console than it does on the wire. A console line with NO resource
+ * is never excused: that is the page's own code complaining, which is what the check is for.
+ */
+export function unexpectedConsoleErrors(
+  lines: readonly string[],
+  expected: readonly ExpectedFailure[],
+): readonly string[] {
+  if (expected.length === 0) return lines
+  return lines.filter((line) => {
+    const resource = consoleErrorResource(line)
+    if (resource === null) return true
+    return !expected.some(
+      (e) =>
+        e.path === resource.pathname &&
+        (e.host === undefined || e.host === resource.host) &&
+        // Chromium's wording, and the STATUS is the discriminator: the same resource answering 500
+        // where a 404 was agreed is a new fact and stays red.
+        line.includes(`status of ${e.status}`),
+    )
+  })
+}
+
 /**
  * A failure the scenario is ABOUT, declared by the scenario that expects it.
  *
@@ -359,16 +394,31 @@ export interface ExpectedFailure {
   readonly path: string
   /** The status the scenario asserts the estate answers. */
   readonly status: number
+  /**
+   * The exact `host` (name and port) this allowance is for. **Optional, and supplying it is
+   * strongly preferred.**
+   *
+   * A path-only allowance excuses `GET /v1/saves/me` on every host the page touches, which in this
+   * estate is six of them. That is not what anybody means when they write one down, and the day
+   * two services share a path shape it is a defect made invisible. `smoke.ts` always supplies it,
+   * from the surface's own observed origin, so an allowance cannot leak onto a neighbour.
+   */
+  readonly host?: string
 }
 
 function isExpected(request: FailedRequest, expected: readonly ExpectedFailure[]): boolean {
-  let path: string
+  let url: URL
   try {
-    path = new URL(request.url).pathname
+    url = new URL(request.url)
   } catch {
     return false
   }
-  return expected.some((e) => e.path === path && request.failure === `HTTP ${e.status}`)
+  return expected.some(
+    (e) =>
+      e.path === url.pathname &&
+      request.failure === `HTTP ${e.status}` &&
+      (e.host === undefined || e.host === url.host),
+  )
 }
 
 /**
@@ -503,8 +553,22 @@ export async function withPage<T>(
 
 /** Wire the four listeners. Separated so a test can drive it with a fake page object. */
 export function attach(page: Pick<BrowserPage, 'on'>, sink: Sink): void {
-  page.on('console', ((msg: { type(): string; text(): string }) => {
-    if (msg.type() === 'error') sink.consoleErrors.push(msg.text().slice(0, 500))
+  // The RESOURCE is appended when Chromium reports one, and the reason is an allowance that could
+  // not otherwise be honoured. A 4xx a service documents as its empty case produces TWO signals:
+  // a failed request, which `ExpectedFailure` can be bound to an exact host and path, and a
+  // console line — `Failed to load resource: the server responded with a status of 404 ()` —
+  // which names nothing at all. Excusing the first and not the second leaves the surface red for
+  // the thing that was just agreed to be correct, and the only alternative is to excuse console
+  // 404s wholesale, which is the blanket rule this repository refuses everywhere else.
+  //
+  // `msg.location().url` is the resource. Appended after ` @ ` rather than folded into a new type,
+  // so nothing that reads `consoleErrors` as a string has to change and a line without a location
+  // is unchanged. `consoleErrorResource` below is the only thing that parses it.
+  page.on('console', ((msg: { type(): string; text(): string; location?(): { url?: string } }) => {
+    if (msg.type() !== 'error') return
+    const url = msg.location?.().url ?? ''
+    const text = msg.text().slice(0, 500)
+    sink.consoleErrors.push(url ? `${text} @ ${url}` : text)
   }) as (arg: never) => void)
 
   page.on('pageerror', ((err: { message?: string }) => {

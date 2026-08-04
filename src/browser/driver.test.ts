@@ -32,9 +32,11 @@ import {
   assertRendered,
   attach,
   browserAvailable,
+  consoleErrorResource,
   countsAsFailure,
   isObservabilitySink,
   newSink,
+  unexpectedConsoleErrors,
   withPage,
   type BrowserConfig,
   type Collected,
@@ -398,4 +400,64 @@ test('an available browser answers with the path it resolved', { skip: noBrowser
   // Returned rather than recomputed at launch, so the thing that was stat'd is the thing that is
   // launched. Two resolutions of "which browser" is one resolution too many.
   assert.ok(state.ok && state.executablePath.length > 0)
+})
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════════
+ * THE ALLOWANCE, AND THAT IT CANNOT WIDEN.
+ *
+ * `ExpectedFailure` now carries a host, and the console half honours the same triple. Both exist
+ * for one entry — emberkin's `/v1/saves/me`, whose 404 IS the empty state — and the entire value
+ * of the design is in what it refuses, so that is what is tested. A suppression that leaked to a
+ * neighbouring host or to a different status would turn this tier's most useful signal into noise
+ * it had been taught to ignore.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════ */
+
+const SAVES = { path: '/v1/saves/me', status: 404, host: 'emberkin.cloudsforge.localtest.me' }
+const LINE = (status: number, url: string): string =>
+  `Failed to load resource: the server responded with a status of ${status} () @ ${url}`
+
+test('a console error naming NO resource is never excused — that is the page\'s own code', () => {
+  const lines = ['ReferenceError: x is not defined']
+  assert.deepEqual(unexpectedConsoleErrors(lines, [SAVES]), lines)
+})
+
+test('the paired console line for an allowed exchange is excused', () => {
+  const lines = [LINE(404, 'https://emberkin.cloudsforge.localtest.me/v1/saves/me')]
+  assert.deepEqual(unexpectedConsoleErrors(lines, [SAVES]), [])
+})
+
+test('the SAME path on ANOTHER HOST is not excused', () => {
+  const lines = [LINE(404, 'https://nimbus.cloudsforge.localtest.me/v1/saves/me')]
+  assert.deepEqual(unexpectedConsoleErrors(lines, [SAVES]), lines)
+})
+
+test('the same host and path with a DIFFERENT status is not excused', () => {
+  const lines = [LINE(500, 'https://emberkin.cloudsforge.localtest.me/v1/saves/me')]
+  assert.deepEqual(unexpectedConsoleErrors(lines, [SAVES]), lines)
+})
+
+test('a path the allowance does not name is not excused, even as a prefix of one that it does', () => {
+  const lines = [LINE(404, 'https://emberkin.cloudsforge.localtest.me/v1/saves/me/achievements')]
+  assert.deepEqual(unexpectedConsoleErrors(lines, [SAVES]), lines)
+})
+
+test('no allowances means nothing is filtered, and the array is handed back as it came', () => {
+  const lines = [LINE(404, 'https://emberkin.cloudsforge.localtest.me/v1/saves/me')]
+  assert.deepEqual(unexpectedConsoleErrors(lines, []), lines)
+})
+
+test('a message whose own text contains " @ " is not mistaken for a location', () => {
+  assert.equal(consoleErrorResource('that address, a @ b, is not valid'), null)
+  assert.equal(
+    consoleErrorResource('rejected a @ b @ https://x.example/y')?.pathname,
+    '/y',
+  )
+})
+
+test('a failed REQUEST is bound to the host too, not just the path', () => {
+  const at = (url: string): FailedRequest => ({ url, method: 'GET', failure: 'HTTP 404' })
+  const own = { ...NOTHING, failedRequests: [at('https://emberkin.cloudsforge.localtest.me/v1/saves/me')] }
+  const other = { ...NOTHING, failedRequests: [at('https://nimbus.cloudsforge.localtest.me/v1/saves/me')] }
+  assert.equal(assertClean(own, 'emberkin', [SAVES]).ok, true)
+  assert.equal(assertClean(other, 'emberkin', [SAVES]).ok, false)
 })
