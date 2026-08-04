@@ -362,11 +362,43 @@ export function registerHandlers(runner: JobRunner, deps: JobDeps): JobRunner {
       return
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // **A SKIP CAN NEITHER OPEN AN INCIDENT NOR CLOSE ONE.**
+    //
+    // `journeys.ts` defines a skip as "not applicable — never green, never red", and an incident
+    // is the reddest thing this service emits. Everything above this line already treats a skip as
+    // the failure it is for RELEASE purposes — the run is recorded, the SLO scores it 0 ("a skip
+    // counts against it, because a skip is not a pass"), the metric carries `status="skip"` and
+    // the gate refuses to promote. What it is not is evidence about a customer's product.
+    //
+    // It cost a real SEV2. On 2026-08-04 `identity.handoff` began skipping on a live deployment
+    // because that deployment's `BEACON_HANDOFF_ORIGIN` named the dev apex and identity's
+    // allowlist — correctly — refused it. Two cycles later the public status page carried
+    // "Account · Investigating · SEV2", where it stayed, because the hand-off it was accusing
+    // works and the only thing that closes a journey incident is a PASS, which a journey that can
+    // only skip will never produce. Beacon published its own misconfiguration as an outage in a
+    // customer's product, on the one page whose entire job is to be believed.
+    //
+    // The return is placed here rather than folded into the window below so that the two halves
+    // are separable: this line says a skip cannot OPEN one, and the absence of a `closeIncident`
+    // call on this path says it cannot CLOSE one either. The second half is the one that keeps
+    // this honest — a journey that was failing and can now only skip has not recovered, it has
+    // stopped answering, and marking it resolved would be exactly the "green on unknown" the
+    // status page refuses.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    if (run.status === 'skip') return
+
     // Two consecutive non-passes, read from the table rather than from a counter in this process.
     // At a five-minute cadence that is ten minutes to detection, which is right for a scenario:
     // a journey touches six services and a single flake in any of them is not news.
+    //
+    // A SKIP IN THE WINDOW DISQUALIFIES IT, for the same reason: fail-skip-fail is two reds with
+    // an unmeasured cycle between them, which is not two consecutive reds. Treating the skip as
+    // the second non-pass is precisely how the incident above opened.
     const recent = await recentRuns(deps.sql, name, 2)
-    if (recent.length < 2 || recent.some((entry) => entry.status === 'pass')) return
+    if (recent.length < 2 || recent.some((entry) => entry.status === 'pass' || entry.status === 'skip')) {
+      return
+    }
 
     const opened = await openIncident(deps.sql, {
       scope: 'journey',

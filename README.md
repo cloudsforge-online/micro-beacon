@@ -204,6 +204,13 @@ convention**.
   excess-property check does not apply to spreads.
 * The unit of publication is the **product group** — "Wallet", never `pay.rates`. A group's state is
   the worst state of the probes inside it.
+* **`state` is `null` when `groups` is empty, and that is not `operational`.** A deployment with no
+  probes registered has measured nothing, and the top-level state used to fold from `worst([])`'s
+  identity and publish `operational` anyway — which is what
+  `https://status.cloudsforge.online/api/status/public` served on 2026-08-04 at 21:45 UTC, on a
+  document whose `groups` was `[]`. This service's own rule is that an unknown is never a pass; an
+  absent claim is null, never a fifth vocabulary word, so `PublicState` stays a closed four-word
+  union that the reader can rely on.
 * The internal lifecycle (`detected → declared → mitigated → resolved → reviewed`) is mapped
   explicitly to a customer-facing one (`investigating → identified → monitoring → resolved`).
 
@@ -247,6 +254,17 @@ Definitions are code (`src/estate.ts`, `src/ecosystem.ts`, `src/browser/`); oper
 **Only journeys that actually exercise something are declared.** The critical-path set in
 13-operational-model.md:435 is nine — register, sign in, SSO handoff, deposit, convert, spend,
 withdraw, mint deploy, market purchase.
+
+**A skip can neither open an incident nor close one.** A skip is "not applicable — never green,
+never red", and an incident is the reddest thing this service emits, so an unmeasurable journey
+must not produce a customer-facing outage — nor mark one resolved, which would be claiming health
+from an absence of evidence. Everything that should notice still notices: the run is recorded, the
+journey SLO scores it 0, `beacon_journey_runs_total{status="skip"}` increments and **the gate
+refuses to promote**. The rule was written after `identity.handoff` began skipping on a live
+deployment whose `BEACON_HANDOFF_ORIGIN` named the wrong apex, and put `Account · Investigating ·
+SEV2` on the public status page for two and a half hours while the hand-off it accused was working
+— an incident nothing could close, because only a pass closes one and a skipping journey never
+passes. `src/jobs.test.ts` pins both halves.
 
 ### 7.1 Per-service journeys — `src/estate.ts`
 
@@ -413,6 +431,18 @@ is the estate's own four-state component and therefore distinguishes "the query 
 nothing" from "the query did not answer" without this repository inventing a regex for it; no
 failed request; no uncaught exception; no console error; and that the surface rendered words only
 its own bundle produces.
+
+**And, on the one surface whose product is a single answer, that it reached one.** Every check
+above hunts for a page that BROKE, and on 2026-08-04 this tier drove
+`status.cloudsforge.online` in Chromium, on a healthy estate, while it read *"Not determined — we
+cannot currently determine status"*, and returned **an empty finding list**. Nothing was broken:
+it answered 200, mounted, painted, logged nothing, failed no request and rendered its brand words.
+It had simply concluded that it could not answer, which is invisible to a check that only looks
+for errors. `SmokeSurface.concludes` names the conclusions a surface exists to reach — for
+`status`, the four verdict headlines and deliberately not the fifth. All four are accepted,
+including `Active outage`: the assertion is that the page ANSWERED, never that the answer was good
+news, because a check that went red on an outage would be a check with an incentive to hide one.
+It is on exactly one of the sixteen surfaces and `smoke.test.ts` asserts that it stays that way.
 
 **TLS.** The dev gateway serves a certificate issued by a local CA that no trust store has
 enrolled. `ignoreHTTPSErrors: true` would accept that — and would also accept an expired

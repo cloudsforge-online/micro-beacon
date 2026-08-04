@@ -232,6 +232,92 @@ test('a signed-in surface that does not know the account is red', () => {
   assert.ok(findings.includes('the session reached this surface'))
 })
 
+/* ------------------------------------------------------------- the surface whose job is a verdict */
+
+/**
+ * The public status page, exactly as it answered on 2026-08-04 — and it is NOT a pass.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THIS TIER LOOKED AT THIS PAGE AND SAW NOTHING WRONG WITH IT.** Not as a thought experiment:
+ * `status.cloudsforge.online` was driven through this file's own `visit()` in Chromium at 22:05
+ * UTC, and `checkSurface` returned `[]` — an empty finding list — against the body text
+ * transcribed below. The estate was healthy at the time: mainnet and testnet both up, both chains
+ * mining, eleven of twelve scheduled journeys green.
+ *
+ * Every check that existed had an honest reason to be quiet. The document answered 200. The
+ * bundle mounted, was painted, logged nothing and failed no request. It rendered its own words —
+ * `STATUS` and `How we measure` are chrome, and chrome is what `renders` is FOR: it pins that the
+ * gateway routed this hostname to this product. And `state--failed` is the design system's marker
+ * for a component that could not load, which is not what happened: the page loaded perfectly and
+ * reached the conclusion that it could not say anything.
+ *
+ * So the gap was not a weak check. It was a missing KIND of check: no assertion anywhere in this
+ * repository read what the status page CONCLUDED. A surface whose entire purpose is to answer one
+ * question must be asserted to have answered it, and for this one surface that is the whole
+ * product — a status page that cannot determine status has failed at the only thing it does, and
+ * it fails silently, looking exactly like a working page to anything that only checks for errors.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+const STATUS_PAGE_WITHOUT_A_VERDICT =
+  'Skip to status CloudsForge STATUS Current History How we measure ? Not determined ' +
+  'We cannot currently determine status. Our status service answered, but part of the answer was ' +
+  'missing or unreadable. An incomplete answer can report a problem; it cannot report that there ' +
+  'is none, so we do not. · Observed 04 Aug 2026, 22:05 UTC (just now) Check again ' +
+  'One open incident Account ◌ Investigating SEV2 Opened 04 Aug 2026, 19:23 UTC · Not yet closed ' +
+  'Product groups The answer contained no product groups. That is not "everything is fine" — it ' +
+  'is an answer we cannot read anything into, which is why the state above says so.'
+
+test('a status page that cannot determine status is RED, however clean the page is', () => {
+  const observation = healthy({
+    surfaceKey: 'status',
+    url: 'https://status.cloudsforge.online/',
+    bodyText: STATUS_PAGE_WITHOUT_A_VERDICT,
+  })
+  const findings = checkSurface(observation, surface('status'), HANDLE)
+  assert.deepEqual(
+    findings.map((f) => f.check),
+    ['the page reaches its verdict'],
+    'the ONLY thing wrong with this page is that it reached no verdict — if anything else fired, ' +
+      'the fixture has drifted from the page that was actually observed',
+  )
+  // The detail has to carry the sentence the reader saw, because "no verdict" is unactionable and
+  // "it says: We cannot currently determine status" names the thing to go and look at.
+  assert.match(findings[0]?.detail ?? '', /cannot currently determine status/i)
+})
+
+test('a status page that reached a verdict is green, and an OUTAGE is a verdict', () => {
+  // The check asserts that the page ANSWERED, never that the answer was good news. A status page
+  // reporting an outage is a status page doing its job, and a check that went red on "Active
+  // outage" would be a check with an incentive to hide one.
+  for (const verdict of [
+    'All systems operational',
+    'Some systems degraded',
+    'Active outage',
+    'Planned maintenance in progress',
+  ]) {
+    const observation = healthy({
+      surfaceKey: 'status',
+      url: 'https://status.cloudsforge.online/',
+      bodyText: `Skip to status CloudsForge STATUS Current History How we measure ${verdict} Measured across 19 product groups.`,
+    })
+    assert.deepEqual(
+      checkSurface(observation, surface('status'), HANDLE),
+      [],
+      `"${verdict}" is a verdict and must not be a finding`,
+    )
+  }
+})
+
+test('only the status surface is asked to reach a verdict', () => {
+  // `concludes` is opt-in, and fifteen of the sixteen surfaces do not carry it. Asserted so that
+  // adding it to a surface whose job is not to conclude anything is a deliberate act rather than
+  // something that arrives by copying a neighbour.
+  assert.deepEqual(
+    SMOKE_SURFACES.filter((s) => s.concludes !== undefined).map((s) => s.key),
+    ['status'],
+  )
+})
+
 test('a navigation that threw is reported against its own surface, not as a crash', () => {
   const observation = healthy({
     surfaceKey: 'status',

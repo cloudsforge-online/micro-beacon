@@ -238,8 +238,34 @@ void _publicMaintenanceIsExact
 
 export interface PublicStatus {
   readonly generatedAt: string
-  /** The hero chip: the worst state across every group. */
-  readonly state: PublicState
+  /**
+   * The hero chip: the worst state across every group — or `null` when there are no groups.
+   *
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   * **NULL MEANS "WE MEASURED NOTHING", AND IT IS NOT THE SAME AS `operational`.**
+   *
+   * This was `PublicState` and it published `operational` for an empty estate, because `worst([])`
+   * folds from its identity. On 2026-08-04 a deployment with no probes registered served exactly
+   * that on the most public URL in the estate:
+   *
+   *     {"generatedAt":"2026-08-04T21:45:14.548Z","state":"operational","groups":[], …}
+   *
+   * Nothing had been measured, and the document said everything was fine. This service's own
+   * package description is "an unknown is never a pass"; that is enforced at the gate and was not
+   * enforced here.
+   *
+   * Null rather than a fifth vocabulary word, deliberately. `PublicState` is a closed four-word
+   * union and the reader depends on it staying closed: `status-web/src/lib/publicstatus.ts` says
+   * of its own `unknown` that it is "deliberately not in `PublicState` — Beacon cannot send it —
+   * so it can only ever be produced HERE, by this page failing to establish something". Adding
+   * `unknown` upstream would let an unknown be sorted and compared as though it were a verdict
+   * this service gave. An absent claim is not a verdict, and null is how a field says it is absent.
+   *
+   * The key is still always present; only its value goes empty. A document whose SHAPE changes
+   * with its content is one every consumer has to special-case.
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   */
+  readonly state: PublicState | null
   readonly groups: readonly PublicGroup[]
   readonly incidents: readonly PublicIncident[]
   readonly maintenance: readonly PublicMaintenance[]
@@ -357,7 +383,10 @@ export function projectStatus(input: ProjectionInput): PublicStatus {
 
   return seal(PUBLIC_STATUS_FIELDS, {
     generatedAt: input.generatedAt.toISOString(),
-    state: worst(groups.map((group) => group.state)),
+    // The empty case is NOT `worst([])`. See the note on `PublicStatus.state`: a fold's identity
+    // is the right answer for a group, whose set can never be empty, and a lie for the estate,
+    // whose set is empty exactly when nothing has been measured.
+    state: groups.length === 0 ? null : worst(groups.map((group) => group.state)),
     incidents: input.incidents.map((entry) => projectIncident(entry.incident, entry.updates)),
     groups,
     maintenance: input.maintenance.map((window) =>

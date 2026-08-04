@@ -131,6 +131,43 @@ export interface SmokeSurface {
    * watch: every entry here is a check this tier has agreed not to make.
    */
   readonly contractual?: readonly ContractualEmpty[]
+  /**
+   * The conclusions this surface exists to reach. One of them must be on the page.
+   *
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   * **THE CHECK THAT WAS MISSING WHEN THE PUBLIC STATUS PAGE COULD NOT DETERMINE STATUS.**
+   *
+   * On 2026-08-04 `status.<apex>` rendered "Not determined — we cannot currently determine
+   * status" on a healthy estate, and this tier drove it in Chromium and found NOTHING: it
+   * answered 200, it mounted, it was painted, it logged no console error, it failed no request,
+   * it showed no `state--failed` node, and it rendered its own brand words. Every one of those
+   * checks was right to be quiet. The page was not broken — it had *concluded* that it could not
+   * answer, which looks identical to a working page to anything that only hunts for errors.
+   *
+   * `renders` could not have caught it and must not be made to. Those patterns pin IDENTITY —
+   * that this hostname is serving this product — so they have to match the chrome, which is
+   * present on every render of the bundle including this one.
+   *
+   * So this is a different assertion with a different name: not "did the bundle load" but "did it
+   * do its job". It is DELIBERATELY narrow. It belongs only on a surface whose product IS a
+   * single answer, which today is exactly one of the sixteen — a status page. A catalogue page
+   * legitimately renders an empty state, a dashboard legitimately renders zeroes, and asserting a
+   * conclusion on either would be this tier asserting a business rule, which `catalogue.ts` §3
+   * forbids for reasons that are a real incident rather than a preference.
+   *
+   * The alternatives are worse in ways worth writing down, because both will be suggested:
+   *
+   *   * **Matching on "Not determined" and going red on it** is an absence assertion, and the
+   *     catalogue's own rule is that there is no `absence` kind — a check that lists the bad
+   *     sentences is a check that passes on the bad sentence nobody thought of. This lists the
+   *     GOOD ones: anything else, including a blank hero and including a sentence invented next
+   *     year, is a finding.
+   *   * **Asserting `operational`** would be a check with an incentive to hide an outage. All
+   *     four verdicts are accepted, because the assertion is that the page ANSWERED, never that
+   *     the answer was good news.
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   */
+  readonly concludes?: readonly RegExp[]
 }
 
 /**
@@ -274,6 +311,24 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
     path: '/',
     session: 'does-not-have-to',
     renders: [/STATUS/, /How we measure/i],
+    /*
+     * The four headlines `status-web` can reach, and the fifth outcome it must not be left in.
+     *
+     * Transcribed from `status-web/src/lib/degrade.ts`'s `headlineFor`, which returns exactly
+     * these four for the four public states and `We cannot currently determine status.` for
+     * `unknown`. They are pinned on that side too — `status-web/test/degrade.test.ts:140` and
+     * `:164` and `:169-170` assert each one — so this list going stale is a red test in the
+     * repository that owns the words, rather than a check here that quietly stops matching.
+     *
+     * `unknown` is absent, and that absence IS the check: it is the one outcome that means the
+     * page did not do its job.
+     */
+    concludes: [
+      /All systems operational/i,
+      /Some systems degraded/i,
+      /Active outage/i,
+      /Planned maintenance in progress/i,
+    ],
   },
   {
     key: 'foresight',
@@ -424,6 +479,18 @@ export const UNPAINTED_BACKGROUND = 'rgba(0, 0, 0, 0)'
  * a missing stylesheet is three defects, and reporting one at a time turns one afternoon into
  * three.
  */
+/**
+ * The top of the page, collapsed onto one line.
+ *
+ * Quoted into the `concludes` finding rather than left out, because "reached no verdict" is not
+ * actionable on its own and "it says: Not determined — we cannot currently determine status" sends
+ * the reader straight to the projection. Bounded, because a body is a whole page.
+ */
+function excerpt(bodyText: string, max = 240): string {
+  const line = bodyText.replace(/\s+/g, ' ').trim()
+  return line.length > max ? `${line.slice(0, max)}…` : line
+}
+
 export function checkSurface(
   observation: PageObservation,
   surface: SmokeSurface,
@@ -515,6 +582,19 @@ export function checkSurface(
           `${surface.key} bundle, or the bundle is not showing its own page`,
       )
     }
+  }
+
+  // The page did its job, or it did not. See `SmokeSurface.concludes`: this is the only check
+  // here that reads what the page CONCLUDED rather than whether it broke, and it exists because a
+  // status page that cannot determine status is indistinguishable from a healthy one to every
+  // other check in this function.
+  if (surface.concludes !== undefined && !surface.concludes.some((p) => p.test(observation.bodyText))) {
+    at(
+      'the page reaches its verdict',
+      `${observation.url} reached none of the conclusions this surface exists ` +
+        `to reach (${surface.concludes.map(String).join(', ')}). What it says instead is: ` +
+        `"${excerpt(observation.bodyText)}"`,
+    )
   }
 
   if (surface.session === 'shows-the-account' && !observation.bodyText.includes(handle)) {

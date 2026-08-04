@@ -182,6 +182,82 @@ describe('a group is as healthy as its unhealthiest part', () => {
   })
 })
 
+describe('a projection with nothing behind it makes no claim', () => {
+  /*
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   * **WHAT THE LIVE ESTATE WAS ACTUALLY PUBLISHING ON 2026-08-04.**
+   *
+   *     GET https://status.cloudsforge.online/api/status/public
+   *     {"generatedAt":"2026-08-04T21:45:14.548Z","state":"operational","groups":[], …}
+   *
+   * Zero probes were registered in that deployment (`GET /v1/probes` → `{"probes":[]}`), so
+   * `byGroup` was empty, so `groups` was empty — and `worst([])` folded from its identity and
+   * returned `operational`. The most public document in the estate asserted that everything was
+   * fine on the strength of nothing at all.
+   *
+   * The reading side caught it: `status-web` recomputes the verdict from the groups it holds and
+   * refuses to say `operational` from an empty set (`status-web/src/lib/publicstatus.ts`, `worst`
+   * — "Empty is `unknown`: nothing measured is not everything healthy"). But that is a second
+   * process, deployed on its own schedule, and the fix belongs where the claim is made: this
+   * service's own package description says "an unknown is never a pass", and a projection that
+   * measured nothing is the purest unknown there is.
+   *
+   * `worst([])` is left alone — it is a fold and `operational` is its identity, which is right for
+   * a GROUP, where the set can never be empty because a group exists only if a probe put it
+   * there. The empty case only ever arises at the top level, and it is handled there.
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   */
+  const nothingMeasured = projectStatus({
+    generatedAt: new Date('2026-08-04T21:45:14.548Z'),
+    probes: [],
+    uptime: [],
+    incidents: [],
+    maintenance: [],
+  })
+
+  it('does not report the estate operational when it holds no groups', () => {
+    assert.equal(nothingMeasured.groups.length, 0)
+    assert.notEqual(
+      nothingMeasured.state,
+      'operational',
+      'nothing was measured, so "everything is fine" is a claim about an absence we cannot see',
+    )
+  })
+
+  it('says so as null rather than by inventing a fifth word', () => {
+    // Null, not `'unknown'`. `PublicState` is a closed four-word vocabulary and `status-web`'s
+    // reader depends on that being true: its comment on `CellState` says `unknown` "is
+    // deliberately not in PublicState — Beacon cannot send it", which is what keeps an unknown
+    // from being sorted or compared as though it were a verdict. An absent claim is the honest
+    // shape, and `readMember` already turns it into the page's own `unknown` and counts it.
+    assert.equal(nothingMeasured.state, null)
+  })
+
+  it('still emits exactly the allowlisted keys, with state present and empty', () => {
+    // The field is not dropped. A missing key and a null one read the same to `status-web`, but a
+    // document whose SHAPE changes with its content is one every consumer has to special-case.
+    assert.deepEqual(Object.keys(nothingMeasured).sort(), [...PUBLIC_STATUS_FIELDS].sort())
+    assert.ok('state' in nothingMeasured)
+  })
+
+  it('still carries the observation time, which is what makes the refusal readable', () => {
+    // `status-web` refuses a document with no readable `generatedAt` outright and shows nothing at
+    // all. "We measured nothing at 21:45" is a far more useful answer than silence.
+    assert.equal(nothingMeasured.generatedAt, '2026-08-04T21:45:14.548Z')
+  })
+
+  it('makes a claim again as soon as there is one probe to make it from', () => {
+    const oneProbe = projectStatus({
+      generatedAt: new Date('2026-08-04T21:45:14.548Z'),
+      probes: [{ productGroup: 'Wallet', state: 'up' }],
+      uptime: [],
+      incidents: [],
+      maintenance: [],
+    })
+    assert.equal(oneProbe.state, 'operational')
+  })
+})
+
 describe('the whole public document', () => {
   const generatedAt = new Date('2026-07-31T10:00:00.000Z')
 
