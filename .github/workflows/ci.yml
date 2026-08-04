@@ -93,17 +93,49 @@ jobs:
       # setTimeout against the work, and that timer is the ONLY thing stopping a hung upstream from
       # holding a job lease for ever. It is a deadline, not a schedule; the difference is that
       # nothing recurs.
+      #
+      # ── A THIRD FILE, AND WHY THE EXEMPTION DID NOT GROW ────────────────────────────────────
+      #
+      # browser/backoff.ts waits out a rate limiter. identity caps /auth/register at five per
+      # window and /auth/login at ten, taken at dispatch so a refusal costs what a success does, and
+      # a shard of six money journeys reaches both — so a browser fixture has to honour the
+      # `retry-after` the SERVICE named or report the product broken because it was throttled. It
+      # fits this rule's own distinction: one call, one wait, one resolution, and nothing recurs.
+      #
+      # The first attempt put that setTimeout in the two files that needed it and this rule went
+      # red, correctly. It was NOT fixed by naming two more paths here: a guard that grows an
+      # exemption per caller stops being a guard. It was fixed by moving every wait in the
+      # repository behind ONE file, which is bounded to 30s by construction, has no setInterval and
+      # no self-rescheduling, is abortable, and whose own backoff.test.ts proves all three — so the
+      # exemption is checked rather than asserted. Adding a fourth path here needs the same argument
+      # made again, and the honest answer will usually be to call this one.
       # ────────────────────────────────────────────────────────────────────────────────────────
-      - name: 'Rule 8 — no setTimeout outside the two deadline races'
+      - name: 'Rule 8 — no setTimeout outside the two deadline races and the one bounded backoff'
         run: |
           if grep -rnE '\bsetTimeout\(' src/ --include='*.ts' \
              | grep -v '\.test\.ts' \
              | grep -vE '^src/(probes|journeys)\.ts:' \
+             | grep -vE '^src/browser/backoff\.ts:' \
              | grep -vE '^[^:]+:[0-9]+: *(//|\*)'; then
-            echo '::error::a setTimeout outside the deadline races in probes.ts/journeys.ts'
+            echo '::error::a setTimeout outside the deadline races or browser/backoff.ts'
             exit 1
           fi
-          echo 'ok: no setTimeout outside the deadline races'
+          echo 'ok: no setTimeout outside the deadline races and the bounded backoff'
+
+      # The exemption above is only safe while backoff.ts stays the shape its header claims. A
+      # setInterval there, or a second file importing node:timers to get around the grep, would be
+      # the schedule this rule exists to keep out — so both are checked by name.
+      - name: 'Rule 8a — the bounded backoff does not become a schedule'
+        run: |
+          if grep -nE '\bsetInterval\(|node:timers' src/browser/backoff.ts; then
+            echo '::error::backoff.ts recurs, or reaches for node:timers — it must not'
+            exit 1
+          fi
+          if ! grep -q 'MAX_WAIT_MS' src/browser/backoff.ts; then
+            echo '::error::backoff.ts no longer bounds its wait'
+            exit 1
+          fi
+          echo 'ok: the backoff is bounded and does not recur'
 
       # ────────────────────────────────────────────────────────────────────────────────────────
       # THE FOUR CONTROLS THIS SERVICE EXISTS TO ADD, ASSERTED AS TEXT.

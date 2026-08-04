@@ -27,6 +27,7 @@
  */
 
 import type { JourneyContext } from '../journeys.ts'
+import { wait, waitMsFor } from './backoff.ts'
 import {
   creditSubject,
   ledgerBalances,
@@ -130,10 +131,8 @@ export async function fundAccount(
     })
     if (registration.status !== 429) break
     // The service's own number, never a guess: it knows its window and this does not.
-    const after = Number(registration.headers.get('retry-after') ?? '5')
-    const waitMs = (Number.isFinite(after) && after > 0 ? Math.min(after, 30) : 5) * 1_000
     await registration.arrayBuffer()
-    await new Promise((resolve) => setTimeout(resolve, waitMs))
+    await wait(waitMsFor(registration.headers.get('retry-after')), ctx.signal)
   }
   if (registration === null || !registration.ok) {
     throw new Error(

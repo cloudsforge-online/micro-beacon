@@ -33,6 +33,7 @@
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
 
+import { wait, waitMsFor } from './backoff.ts'
 import { keccak256, selector, toHex } from './keccak.ts'
 
 /** Re-exported through one object so `toHexOfSignature` reads as the whole-digest sibling of `selector`. */
@@ -207,10 +208,8 @@ export async function signInForToken(
       ...(identity.signal ? { signal: identity.signal } : {}),
     })
     if (response.status !== 429) break
-    const after = Number(response.headers.get('retry-after') ?? '5')
-    const waitMs = (Number.isFinite(after) && after > 0 ? Math.min(after, 30) : 5) * 1_000
     await response.arrayBuffer()
-    await new Promise((resolve) => setTimeout(resolve, waitMs))
+    await wait(waitMsFor(response.headers.get('retry-after')), identity.signal)
   }
   if (response === null || !response.ok) {
     throw new MoneyError(
