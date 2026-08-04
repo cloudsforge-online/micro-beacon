@@ -28,9 +28,16 @@
  * inside `POST /v1/withdrawals` and refuses rather than guessing when none is configured;
  * `WALLET_FEE_QUOTES` appears nowhere in `deploy/compose/docker-compose.estate.yml`. Driven:
  *
- *   * `EMBER` → 400 `fee_unavailable`, "no EMBER network fee is configured; withdrawals for it are
+ *   * `EMBER` → `fee_unavailable`, "no EMBER network fee is configured; withdrawals for it are
  *     refused rather than priced by guessing"
- *   * `SHARD` → 400 `not_withdrawable`, "SHARD does not settle on a chain and cannot be withdrawn"
+ *   * `SHARD` → `not_withdrawable`, "SHARD does not settle on a chain and cannot be withdrawn"
+ *
+ * **The status codes that used to be written above — 400 for both — were wrong, and are removed
+ * rather than corrected in place.** `micro-wallet`'s source says `not_withdrawable` is 422
+ * (`withdrawals.ts`) and `fee_unavailable` is 503; 400 in that route is only ever `invalid_amount`.
+ * Two stale numbers standing beside a correct error code is the failure this repository keeps
+ * finding: the code was checked, the number beside it was believed. The `expected` lists below
+ * carry the statuses, read out of the service, and say which gate produces each.
  *
  * So the settlement half of BJ-WAL-08 cannot be driven here. The half that CAN — and which is the
  * half doc 22's row actually specifies, `asserts: client-request` — is that the destination
@@ -59,28 +66,78 @@ type Implementation = (
  * The fixture's asset, and it is deliberately NOT a chain asset.
  *
  * ══════════════════════════════════════════════════════════════════════════════════════════════
- * **A TEST FIXTURE MUST NOT MINT A LIABILITY NOTHING BACKS.**
+ * **A TEST FIXTURE MUST NOT MINT A LIABILITY NOTHING BACKS — AND MUST NOT MOVE MONEY EITHER.**
  *
- * The first draft of this file credited 5 EMBER per run. EMBER settles on chain 7412, so a ledger
- * credit with no matching on-chain deposit is unbacked liability — and while this was being
- * written, reconciliation caught exactly that shape estate-wide and froze the asset:
- * `drift_exceeded`, ledger 36e18 against chain 31e18. The runs of this journey were part of what
- * it was measuring.
+ * The first draft of this file credited 5 EMBER per run and never reversed it. Seventy fixture
+ * entries accumulated, twenty-one of them EMBER, and reconciliation measured the result exactly:
+ * custody 135321000000000000000 wei against 31000000000000000000 observed on chain 7412, drift
+ * 104321000000000000000, `drift_exceeded` — and it FROZE EMBER estate-wide.
  *
- * SHARD is the internal unit. It settles on no chain — `micro-wallet` says so when asked to
- * withdraw one — so crediting it creates no reconcilable position and no drift. Every assertion
- * below is unaffected: the send flow's `client-request` half is about which BYTES left the browser,
- * and the service refuses SHARD and EMBER alike in this estate.
+ * The seed asset was moved to SHARD for that reason. **It has moved back to EMBER on 2026-08-04,
+ * and both halves of the original objection are now answered elsewhere:**
  *
- * It also exercises a defect worth naming. `hub-web/src/components/send.tsx` filters the asset list
- * with `/^[A-Z]+$/`, and its own comment says the intent is to exclude SHARD: "A SHARD row would be
- * offered and then refused by the service ('does not settle on a chain'), which is a dead end
- * presented as a choice." `SHARD` matches `^[A-Z]+$`, so the filter does the opposite of what the
- * comment beside it says, and the form offers it.
+ *   1. **The credit is reversed.** `fundAccount` registers a `ctx.cleanup` that calls
+ *      `reverseEntry` on every exit path, so the fixture posts and unposts within one run and
+ *      leaves no position for reconciliation to find. That is what makes EMBER safe to credit
+ *      again; nothing about the freeze above was wrong.
+ *   2. **SHARD is no longer offered by the page.** `hub-web`'s Send filter was `/^[A-Z]+$/`, which
+ *      its own comment said was meant to exclude SHARD and did not, because `SHARD` is plain
+ *      uppercase. It is now an allowlist — it has to be, since `USD` is also plain uppercase and
+ *      also unwithdrawable, so no pattern over the string can separate them. With SHARD correctly
+ *      excluded, a SHARD fixture cannot arm a payment at all: the asset never appears, Review
+ *      never enables, and these journeys fail at a step that has nothing to do with what they
+ *      assert.
+ *
+ * ── WHAT THAT COST, AND WHAT REPLACES IT ──────────────────────────────────────────────────────
+ *
+ * SHARD guaranteed "no money moves" STRUCTURALLY: `micro-wallet` refuses it at the asset gate
+ * (`withdrawals.ts`, `not_withdrawable`, 422) before anything is reserved. **EMBER has no such
+ * gate, and the guarantee does not transfer.**
+ *
+ * It is worth being exact about how nearly this went wrong. The destination below is the burn
+ * address, and it was assumed to be refused as malformed — it is not. `canonicaliseAddress('ember',
+ * '0x…dEaD')` ACCEPTS it: the mixed case is a valid EIP-55 checksum, which was confirmed by running
+ * micro-wallet's own canonicaliser rather than by reading it. So with EMBER the request now passes
+ * the asset gate AND the address gate, and the only thing left between this fixture and a real
+ * withdrawal of a real chain asset to an address nobody can spend from is the balance.
+ *
+ * So the guarantee is made explicit and CHECKED, rather than left to be true by accident:
+ * `SEED_AMOUNT` is asserted below to be far smaller than the amount these journeys type. A future
+ * edit that raises the seed past the request — an entirely reasonable-looking change — would
+ * otherwise turn a refusal into a queued payment, and the first anyone knew of it would be
+ * reconciliation.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
-const SEED_ASSET = 'SHARD'
+const SEED_ASSET = 'EMBER'
 const SEED_AMOUNT = 1_234_567n
+
+/**
+ * What the send form is filled with, in display units, and the same figure in base units.
+ *
+ * EMBER carries 18 decimals, so 1000 EMBER is 10^21 of the smallest unit — fourteen orders of
+ * magnitude above `SEED_AMOUNT`. The pair is written out here rather than left implicit in a
+ * string literal three hundred lines below, because the safety property is a relationship BETWEEN
+ * these two numbers and a relationship nobody can see is a relationship nobody preserves.
+ */
+const SEND_AMOUNT_DISPLAY = '1000'
+const SEND_AMOUNT_BASE = 1_000n * 10n ** 18n
+
+/**
+ * **The refusal these journeys depend on, enforced at import.**
+ *
+ * Throws rather than warns, and does so before a browser is launched or an account is created: a
+ * fixture that can no longer guarantee its withdrawal is refused must not run at all. See the
+ * header — with EMBER the asset gate and the address gate both pass, so this is the only thing
+ * standing between the browser tier and a real payment.
+ */
+if (SEED_AMOUNT >= SEND_AMOUNT_BASE) {
+  throw new Error(
+    `the wallet browser fixture seeds ${SEED_AMOUNT} of ${SEED_ASSET} and asks to send ` +
+      `${SEND_AMOUNT_BASE}. The request must exceed the balance by a wide margin or the ` +
+      'withdrawal could SUCCEED, and these journeys move real money on a real chain to an ' +
+      'address nobody can spend from. Lower the seed or raise the amount sent.',
+  )
+}
 
 /**
  * An address that is definitely not one of this account's own wallets.
@@ -240,7 +297,33 @@ const sendDestinationIsConfirmed: Implementation = (config, scenario, operator) 
     // The withdrawal this estate cannot price. Declared, because a refusal scenario's 4xx arrives
     // in the same bucket as a 404ing chunk and the journey could otherwise never be green — and
     // narrow, because a blanket "ignore 4xx" would delete the check for everything else on the page.
-    expected: [{ path: '/v1/withdrawals', status: 400 }],
+    // ── EVERY WAY micro-wallet CAN REFUSE THIS, BECAUSE WHICH ONE FIRES IS A DEPLOY FACT ──────
+    //
+    // Read out of `wallet/src/withdrawals.ts` and `wallet/src/server.ts`, in the order the route
+    // applies them. Under-declaring makes the journey red for a refusal that was expected;
+    // the single stale `400` that used to be here is neither of those, it is simply not a status
+    // this route returns for this request.
+    //
+    //   503  fee_unavailable    — no WALLET_FEE_QUOTES in this estate, so EMBER cannot be priced.
+    //                             THIS IS THE ONE THAT FIRES TODAY, and it is raised before the
+    //                             idempotency claim and before any ledger reservation.
+    //   422  amount_too_small   — below the minimum-fee multiple. What BJ-WAL-08's dust amount
+    //                             would meet once fees ARE configured.
+    //   422  not_withdrawable   — the asset gate. Unreachable for EMBER; reachable again the day
+    //                             the seed asset changes back.
+    //   409  ledger refusal     — insufficient funds. What BJ-WAL-09's 1000 EMBER would meet once
+    //                             fees are configured, and the refusal the import-time check
+    //                             above exists to guarantee.
+    //
+    // NOT DRIVEN. The browser tier is not registered in this estate — `journeys` holds eleven rows
+    // and none is a `browser.*` — so this list is derived from the service's source and has not
+    // been confirmed against a running page. Stated because an undriven claim that looks driven is
+    // exactly what the header of this file is about.
+    expected: [
+      { path: '/v1/withdrawals', status: 503 },
+      { path: '/v1/withdrawals', status: 422 },
+      { path: '/v1/withdrawals', status: 409 },
+    ],
     async verify(ctx, page, collected, base) {
       const account = await ctx.step('an account with a real balance, posted to the ledger', async () =>
         fundAccount(ctx, operator, { tag: 'w8', credit: new Map([[SEED_ASSET, SEED_AMOUNT]]) }),
@@ -426,7 +509,33 @@ const sendDoubleSubmit: Implementation = (config, scenario, operator) =>
     config,
     surface: 'hub',
     critical: scenario.gate,
-    expected: [{ path: '/v1/withdrawals', status: 400 }],
+    // ── EVERY WAY micro-wallet CAN REFUSE THIS, BECAUSE WHICH ONE FIRES IS A DEPLOY FACT ──────
+    //
+    // Read out of `wallet/src/withdrawals.ts` and `wallet/src/server.ts`, in the order the route
+    // applies them. Under-declaring makes the journey red for a refusal that was expected;
+    // the single stale `400` that used to be here is neither of those, it is simply not a status
+    // this route returns for this request.
+    //
+    //   503  fee_unavailable    — no WALLET_FEE_QUOTES in this estate, so EMBER cannot be priced.
+    //                             THIS IS THE ONE THAT FIRES TODAY, and it is raised before the
+    //                             idempotency claim and before any ledger reservation.
+    //   422  amount_too_small   — below the minimum-fee multiple. What BJ-WAL-08's dust amount
+    //                             would meet once fees ARE configured.
+    //   422  not_withdrawable   — the asset gate. Unreachable for EMBER; reachable again the day
+    //                             the seed asset changes back.
+    //   409  ledger refusal     — insufficient funds. What BJ-WAL-09's 1000 EMBER would meet once
+    //                             fees are configured, and the refusal the import-time check
+    //                             above exists to guarantee.
+    //
+    // NOT DRIVEN. The browser tier is not registered in this estate — `journeys` holds eleven rows
+    // and none is a `browser.*` — so this list is derived from the service's source and has not
+    // been confirmed against a running page. Stated because an undriven claim that looks driven is
+    // exactly what the header of this file is about.
+    expected: [
+      { path: '/v1/withdrawals', status: 503 },
+      { path: '/v1/withdrawals', status: 422 },
+      { path: '/v1/withdrawals', status: 409 },
+    ],
     async verify(ctx, page, collected, base) {
       const account = await ctx.step('an account with a real balance, posted to the ledger', async () =>
         fundAccount(ctx, operator, { tag: 'w9', credit: new Map([[SEED_ASSET, SEED_AMOUNT]]) }),
@@ -440,7 +549,8 @@ const sendDoubleSubmit: Implementation = (config, scenario, operator) =>
         await page.goto(`${base.replace(/\/+$/, '')}/wallet`, { waitUntil: 'domcontentloaded' })
         await settled(page, config.timeoutMs)
         await page.fill('#send-destination', FOREIGN_DESTINATION)
-        await page.fill('#send-amount', '1000')
+        // From the constant, so the amount and the import-time safety check cannot drift apart.
+        await page.fill('#send-amount', SEND_AMOUNT_DISPLAY)
         await page.click('button:has-text("Review")')
         await page.waitForTimeout(1_000)
         const armed = await page.evaluate(
