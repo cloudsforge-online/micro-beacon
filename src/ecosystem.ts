@@ -32,7 +32,7 @@
  * the journey that moves it — or to the named, cited reason no journey can. A journey added here
  * without a claim it moves fails `claims.test.ts`.
  *
- * ## Why only four are declared unconditionally
+ * ## Why only five are declared unconditionally
  *
  * The same rule `estate.ts` already holds itself to: **only journeys that actually exercise
  * something are declared.** Everything below either runs today against the dev estate — verified
@@ -58,6 +58,9 @@
  *   GET  /v1/portfolio                  hub-api/src/server.ts
  *   GET  /v1/activity                   hub-api/src/server.ts
  *   GET  /trial-balance                 ledger/src/server.ts
+ *   POST /v1/deposits                   wallet/src/server.ts
+ *   GET  /v1/deposits                   wallet/src/server.ts
+ *   GET  /v1/addresses/:address         custody/src/server.ts
  *
  * A method and a path rather than a line number, for the reason `estate.ts` sets out at length: a
  * line number is a claim about a file that any edit to an earlier part of that file silently
@@ -653,6 +656,301 @@ export const ECOSYSTEM_TRIAL_BALANCE: JourneyDefinition = {
   },
 }
 
+/* ------------------------------------------------------------------ 6. deposit provisioning */
+
+/**
+ * The asset this journey provisions an address for.
+ *
+ * EMBER, because it is the estate's own chain and `CHAIN_FOR_ASSET` in `wallet/src/addresses.ts`
+ * maps it to `ember`. SHARD would be wrong in the way that matters: it settles on no chain, so
+ * wallet refuses it 400 `not_depositable` and the happy path would never reach custody at all —
+ * a journey that looked like it was driving provisioning while driving only the refusal.
+ */
+const DEPOSIT_ASSET = 'EMBER'
+
+/**
+ * `POST /v1/deposits` provisions a real address, and custody is holding the key it names.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THIS ROUTE WAS DEAD FOR THE WHOLE LIFE OF THE SERVICE AND NOTHING NOTICED, WHICH IS THE
+ * REASON THIS JOURNEY EXISTS RATHER THAN THE BUG IT FIXES.**
+ *
+ * Deposit provisioning is the ONLY way money enters this platform: payments here are crypto-native
+ * and balances are funded by on-chain deposit. It answered 500 to every caller — wallet never sent
+ * the `orderId` custody requires and nothing caught the resulting `CustodyRefusedError` — and every
+ * layer of observability missed it. `journeys.ts` names `deposit` in the critical-path set and this
+ * repository drove no part of it; `conformance` deliberately excluded the happy path *because* it
+ * was broken. A capability that is listed and not driven is a claim, not a check.
+ *
+ * So the assertions below are chosen against that defect specifically, and each is proved to go
+ * red in `ecosystem.test.ts` — including one test that stands the estate up answering the exact
+ * 500 it used to answer and requires this journey to report `fail`.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ *
+ * ## Why this is an ecosystem journey and not a wallet one
+ *
+ * The rule at the head of this file: a journey here must need at least two processes to be wrong.
+ * Provisioning needs wallet to mint an assignment id, present it to custody as the `orderId` half
+ * of the SD-09 signing binding, canonicalise the address custody returns, file a wallet row, an
+ * assignment row and an outbox event in one transaction, and register the address with the indexer.
+ * The defect was in the seam, and neither service's suite could see it: wallet's tests use a local
+ * custody fake, and custody's tests never see wallet's request. `custody holds the key that
+ * address names` is the step no per-service suite can write.
+ *
+ * ## What it deliberately does NOT prove
+ *
+ * **No money moves.** This provisions the address a deposit would arrive at; it does not deposit.
+ * Crediting one needs an on-chain transfer and the indexer's confirmation depth, which no journey
+ * can produce on demand. The name says `deposit-address` rather than `deposit` for that reason —
+ * the critical-path set calls the journey "deposit", and claiming that name for the half that is
+ * driveable is how a gap stops being visible.
+ *
+ * **The `orderId` binding is not read back.** `GET /v1/addresses/:address` publishes neither
+ * `userId` nor `orderId`, on purpose — custody's own comment says publishing them would make the
+ * `/sign` binding check circular, since the binding's entropy is entirely in those two fields.
+ * `GET /v1/admin/keys/:address` serves them to a credential beacon cannot hold. What the 201 does
+ * prove is that SOME acceptable `orderId` crossed the seam, because custody reads it with no
+ * default and refuses without it — which is precisely the defect that was live.
+ *
+ * ## What a run leaves behind, and why it is one row and not two
+ *
+ * One custody key, one managed wallet row, one `deposit_address_assignments` row and one indexer
+ * watch, per run, for ever — identity has no deletion route a monitor may call and neither does
+ * custody. At a five-minute cadence that is ~288 addresses a day, alongside the throwaway account
+ * every journey in this file already leaves (`calls.ts`, `throwaway()`).
+ *
+ * It is ONE and not two because of the second provision below, and the number of things standing
+ * behind that is currently in flux — which is why this journey asserts the OUTCOME rather than
+ * naming a mechanism. Checked on 2026-08-04 rather than taken from a comment:
+ *
+ *   * `wallet/src/deposits.ts` looks for an active assignment before it mints, and its own comment
+ *     says that lookup — not the idempotency key it sends — is what actually stops a retry.
+ *   * That comment is now half stale. `custody/src/keys.ts`'s `findReplay` consults
+ *     `(created_by, idempotency_key)` and then the deposit binding, added by the
+ *     `provisioning_idempotency` migration, so custody deduplicates too.
+ *   * **And that is not deployed.** `custody_keys` on the running estate has no `idempotency_key`
+ *     column at all (`\d custody_keys`, 2026-08-04), so on the estate as it stands today wallet's
+ *     find-or-create really is the only guard, and after the next deploy there will be two.
+ *
+ * Asserting "asking twice yields one address" holds across all three of those states and needs no
+ * edit when the fourth arrives. If every guard breaks at once, this journey goes red BEFORE the
+ * estate has accumulated a second address per run, which is the correct order to find out in.
+ *
+ *     delete from custody_keys where user_id in (select id from users where email like 'beacon+%');
+ *
+ * ## Why it is not critical, deliberately
+ *
+ * The same decision `ecosystem.event-bus` records, for the same reason and with the same exit: a
+ * critical journey refuses every release from the moment it is declared, and this one has no
+ * history in any deployment. It also spans three processes and an indexer registration, so its own
+ * flake rate is an assumption rather than a number. It blocks a release by FAILING, which is the
+ * signal it is here to give, and it is promoted to critical — matching the critical-path set that
+ * names deposit — once it has run on a schedule long enough for that number to be known.
+ */
+export const ECOSYSTEM_DEPOSIT_ADDRESS: JourneyDefinition = {
+  name: 'ecosystem.deposit-address',
+  title: 'A deposit address is provisioned, and custody holds the key it names',
+  productGroup: GROUPS.wallet,
+  // `wallet`. Three services are dialled and wallet is the one that must produce the joined-up
+  // answer: it orchestrates the mint, files the rows and owns the route a client calls. A failure
+  // here is attributed to wallet even when custody caused it — which is exactly what happened.
+  service: 'wallet',
+  critical: false,
+  async run(ctx) {
+    const identity = ctx.target('identity')
+    const wallet = ctx.target('wallet')
+    const custody = ctx.target('custody')
+
+    const subject = await ctx.step('register an account in identity', () =>
+      registerThrowaway(ctx, identity),
+    )
+
+    const assignment = await ctx.step('provision a deposit address', async () => {
+      const result = await call(ctx, `${wallet}/v1/deposits`, {
+        method: 'POST',
+        token: subject.token,
+        body: { assetCode: DEPOSIT_ASSET },
+      })
+      // 201 EXACTLY, and the body of the message carries what came back. "Any 2xx" would have
+      // passed a route that answered 200 with an empty envelope, and the 500 this replaced told
+      // an operator nothing about which of the two services had refused.
+      ctx.assert(
+        result.status === 201,
+        `expected 201 from POST /v1/deposits, got ${result.status} — ${result.text.slice(0, 200)}`,
+      )
+
+      const address = stringField(result.body, 'assignment', 'address')
+      ctx.assert(
+        address !== null && address.length > 0,
+        'the provision answered 201 and returned no address — a funding page with an empty box on it',
+      )
+      const id = stringField(result.body, 'assignment', 'id')
+      ctx.assert(id !== null, 'the assignment carries no id, so nothing can name it again')
+      ctx.assert(
+        stringField(result.body, 'assignment', 'userId') === subject.userId,
+        `the address was provisioned for ${String(stringField(result.body, 'assignment', 'userId'))} ` +
+          `and not for the account that asked. One missing predicate in a find-or-create is how a ` +
+          `funding page shows somebody else's address, which is the worst outcome this route has.`,
+      )
+      ctx.assert(
+        stringField(result.body, 'assignment', 'status') === 'active',
+        `the assignment is "${String(stringField(result.body, 'assignment', 'status'))}" rather than ` +
+          `active, so money sent to it would arrive at an address nothing is crediting`,
+      )
+      const urn = stringField(result.body, 'assignment', 'custodyKeyUrn')
+      // The URN is the handle settlement and the export ceremony dereference. `04-domain-model.md`
+      // sets its form and `wallet/src/custodyclient.ts` mints it from custody's own reply, so it
+      // MUST end in the address served beside it. One that names a different address is a row
+      // that dereferences to somebody else's key.
+      ctx.assert(
+        urn !== null && urn.endsWith(address as string),
+        `the custody key URN (${String(urn)}) does not name the address served beside it ` +
+          `(${String(address)})`,
+      )
+      return { id: id as string, address: address as string }
+    })
+
+    await ctx.step('custody holds the key that address names', async () => {
+      // ────────────────────────────────────────────────────────────────────────────────────────
+      // THE SEAM, AND THE STEP NO PER-SERVICE SUITE CAN WRITE.
+      //
+      // Asked of custody DIRECTLY, with the user's own token, so nothing wallet says is taken on
+      // trust. Wallet inventing an address, or filing one custody never minted, produces a row
+      // that reads perfectly in wallet's own suite and in wallet's own API — and money sent to it
+      // is money nobody holds a key for. Custody answers 404 rather than 403 to a caller who does
+      // not own the key, so a 200 here is also the ownership binding: this account's token
+      // resolves to the user id custody filed against the key.
+      // ────────────────────────────────────────────────────────────────────────────────────────
+      const result = await call(ctx, `${custody}/v1/addresses/${assignment.address}`, {
+        token: subject.token,
+      })
+      ctx.assert(
+        result.status === 200,
+        `custody answered ${result.status} for the address wallet had just provisioned ` +
+          `(${assignment.address}). A 404 means wallet filed an address custody never minted; ` +
+          `money sent there is money nobody holds a key for.`,
+      )
+      ctx.assert(
+        stringField(result.body, 'key', 'address') === assignment.address,
+        `custody answered for ${String(stringField(result.body, 'key', 'address'))}, not for the ` +
+          `address asked about`,
+      )
+      // `purpose` is one of the five fields custody compares character for character before it
+      // signs (SD-09). A deposit address filed under any other purpose is a key settlement will
+      // refuse to sweep with, every tick, for ever.
+      ctx.assert(
+        stringField(result.body, 'key', 'purpose') === 'deposit',
+        `custody holds this key for "${String(stringField(result.body, 'key', 'purpose'))}" rather ` +
+          `than for deposit`,
+      )
+      ctx.assert(
+        stringField(result.body, 'key', 'status') === 'active',
+        `custody holds this key as "${String(stringField(result.body, 'key', 'status'))}"`,
+      )
+    })
+
+    await ctx.step('an unauthenticated read of the key is refused', async () => {
+      // Asserted, not assumed, and asserted against CUSTODY. An address is not a secret, but the
+      // route that serves one is the same route the export ceremony is reached through, and a
+      // monitor that only ever calls it with a token cannot tell a gated endpoint from an open
+      // one. The day that regresses is the day nobody notices.
+      const anon = await call(ctx, `${custody}/v1/addresses/${assignment.address}`)
+      ctx.assert(
+        anon.status === 401 || anon.status === 403,
+        `custody served a key to an unauthenticated caller (${anon.status})`,
+      )
+    })
+
+    await ctx.step('asking again returns the same address, not a second one', async () => {
+      // ────────────────────────────────────────────────────────────────────────────────────────
+      // ONE ADDRESS PER ASSET, HOWEVER MANY TIMES IT IS ASKED FOR.
+      //
+      // Asserted as an OUTCOME and never as a mechanism, because the mechanisms are moving under
+      // it: wallet's find-or-create is the only guard on the estate as deployed today, and
+      // custody's own `findReplay` becomes a second one the moment the `provisioning_idempotency`
+      // migration ships. See the header, where both were checked rather than read.
+      //
+      // What is at stake if they all go: every load of the receive panel leaves another watched
+      // address behind and another key in the service that holds the estate's keys, under a
+      // binding settlement must restate to sweep. Nothing else in the estate would say so.
+      // ────────────────────────────────────────────────────────────────────────────────────────
+      const again = await call(ctx, `${wallet}/v1/deposits`, {
+        method: 'POST',
+        token: subject.token,
+        body: { assetCode: DEPOSIT_ASSET },
+      })
+      ctx.assert(
+        again.status === 201,
+        `a repeated provision answered ${again.status} — ${again.text.slice(0, 160)}`,
+      )
+      ctx.assert(
+        stringField(again.body, 'assignment', 'id') === assignment.id &&
+          stringField(again.body, 'assignment', 'address') === assignment.address,
+        `asking twice produced two addresses (${assignment.address} then ` +
+          `${String(stringField(again.body, 'assignment', 'address'))}). Every guard against a ` +
+          `retry — or a page reload — minting a second key has failed at once: wallet's ` +
+          `find-or-create and, where it is deployed, custody's own idempotency.`,
+      )
+    })
+
+    await ctx.step('the assignment is listed back', async () => {
+      const result = await call(ctx, `${wallet}/v1/deposits`, { token: subject.token })
+      ctx.assert(result.status === 200, `expected 200 from GET /v1/deposits, got ${result.status}`)
+      const listed = field(result.body, 'assignments')
+      ctx.assert(Array.isArray(listed), 'GET /v1/deposits returned no assignments array')
+      const mine = (listed as unknown[])
+        .map((row) => (typeof row === 'object' && row !== null ? (row as Json) : null))
+        .filter((row): row is Json => row !== null)
+      const found = mine.find((row) => stringField(row, 'id') === assignment.id)
+      // Provisioned and not readable back is a user who cannot find the address they were just
+      // given, which is the same outcome as never having been given one.
+      ctx.assert(
+        found !== undefined,
+        `assignment ${assignment.id} was provisioned and does not appear in GET /v1/deposits`,
+      )
+      ctx.assert(
+        stringField(found as Json, 'address') === assignment.address,
+        `the listed address differs from the one provisioned: ` +
+          `${String(stringField(found as Json, 'address'))} vs ${assignment.address}`,
+      )
+    })
+
+    await ctx.step('an asset that does not settle on a chain is refused', async () => {
+      // The other half of the route, and the half that keeps the first half honest: a route that
+      // answered 201 to everything would pass every assertion above. A Shard deposit address
+      // would be an address on no chain — money sent to a place that cannot credit it — so the
+      // refusal is the feature, and `not_depositable` is the code a funding page renders.
+      const result = await call(ctx, `${wallet}/v1/deposits`, {
+        method: 'POST',
+        token: subject.token,
+        body: { assetCode: 'NOTACOIN' },
+      })
+      ctx.assert(
+        result.status === 400,
+        `an asset that settles on no chain was answered ${result.status} rather than 400`,
+      )
+      ctx.assert(
+        stringField(result.body, 'error', 'code') === 'not_depositable',
+        `the refusal's code is "${String(stringField(result.body, 'error', 'code'))}" rather than ` +
+          `not_depositable, which is the code a client renders on the funding page`,
+      )
+    })
+
+    await ctx.step('an unauthenticated provision is refused', async () => {
+      const anon = await call(ctx, `${wallet}/v1/deposits`, {
+        method: 'POST',
+        body: { assetCode: DEPOSIT_ASSET },
+      })
+      // An open provisioning route mints custody keys for anybody who asks, which is an unbounded
+      // write into the service that holds the estate's keys.
+      ctx.assert(
+        anon.status === 401,
+        `wallet provisioned a deposit address for an unauthenticated caller (${anon.status})`,
+      )
+    })
+  },
+}
+
 /* ------------------------------------------------------------------ the registry */
 
 /** Read at call time rather than at import, so a test can set it without reloading the module. */
@@ -677,6 +975,12 @@ export function ecosystemJourneys(
     ECOSYSTEM_ONE_ACTIVITY,
     ECOSYSTEM_ONE_PORTFOLIO,
     ECOSYSTEM_ONE_ACCOUNT,
+    // Declared unconditionally, like the four above it and unlike the trial balance. It needs no
+    // credential — the user's own token reaches both routes — only an address for `wallet` and one
+    // for `custody`, and a deployment that runs neither gets the same skip-with-a-reason
+    // `ctx.target` gives every other journey. That is the ordinary case this repository already
+    // handles, not the "declared and skipping for ever" case its rule is about.
+    ECOSYSTEM_DEPOSIT_ADDRESS,
     ...(withCredential ? [ECOSYSTEM_TRIAL_BALANCE] : []),
   ]
 }
@@ -687,6 +991,7 @@ export const ALL_ECOSYSTEM_JOURNEYS: readonly JourneyDefinition[] = [
   ECOSYSTEM_ONE_ACTIVITY,
   ECOSYSTEM_ONE_PORTFOLIO,
   ECOSYSTEM_ONE_ACCOUNT,
+  ECOSYSTEM_DEPOSIT_ADDRESS,
   ECOSYSTEM_TRIAL_BALANCE,
 ]
 

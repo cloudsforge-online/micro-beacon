@@ -196,15 +196,41 @@ const NO_MFA_UI: Blocker = {
   doc: '22 §8.2',
 }
 
-const NO_CUSTODY_ADDRESS: Blocker = {
-  reason:
-    'micro-custody refuses to mint a deposit address for this estate, so no managed wallet and no ' +
-    'exportable key can exist for a journey to drive. Driven: POST /v1/deposits on micro-wallet ' +
-    'answers 500 and the wallet log records CustodyRefusedError on POST http://custody:4000/' +
-    'v1/addresses → 400. The receive panel and the export ceremony both render; neither has a ' +
-    'wallet to act on. This is an estate configuration gap, not a missing screen.',
-  doc: '22 §8.2',
-}
+/*
+ * ── A FIFTH BLOCKER IS GONE, AND ITS PREMISE HAD BECOME FALSE RATHER THAN HAVING BEEN WRONG ──
+ *
+ * `NO_CUSTODY_ADDRESS` stood here and blocked BJ-WAL-16 and BJ-WAL-18. It said: "micro-custody
+ * refuses to mint a deposit address for this estate… Driven: POST /v1/deposits on micro-wallet
+ * answers 500 and the wallet log records CustodyRefusedError on POST http://custody:4000/
+ * v1/addresses → 400."
+ *
+ * Every word of that was true when it was written, and it is the interesting case: this is not a
+ * claim that was checked against the wrong thing, like `NO_WALLET_WRITE`. It was checked correctly,
+ * against the running estate, and then the estate was FIXED — wallet never sent the `orderId`
+ * custody requires and now does (`wallet/src/deposits.ts`, the block above `custody.createAddress`)
+ * — and nothing anywhere re-asked the question. A blocker is a claim with a shelf life, and the
+ * repair of the thing it describes is precisely the event that will not update it.
+ *
+ * Re-driven on 2026-08-04, through the gateway with a user's own token, before this was removed:
+ *
+ *   POST pay.<apex>/v1/deposits {"assetCode":"EMBER"}  →  201, with an address, a walletId, a
+ *   custodyKeyUrn naming that address, status "active" and a non-null watchedAt.
+ *   GET  vault.<apex>/v1/addresses/<that address>      →  200, purpose "deposit", scheme hd_bip44.
+ *
+ * So a managed wallet and an exportable key both exist for a journey to act on, and the premise is
+ * gone. `ecosystem.deposit-address` in `../ecosystem.ts` now drives the HTTP half of this every
+ * five minutes, which is what stops the same fact going stale a second time — a blocker removed by
+ * hand is a claim; a journey is a check.
+ *
+ * Removing a blocker does NOT declare a journey. BJ-WAL-16 and BJ-WAL-18 move from "cannot be
+ * written" to "not written yet", which `unimplemented()` names one line at a time. Nothing goes
+ * green because of this.
+ *
+ * What stays blocked, and is a different claim from the one removed: BJ-WAL-19 needs a
+ * notification surface (`NO_NOTIFY_UI`) and the export ceremony's SECOND-FACTOR steps still have
+ * no screen (`NO_MFA_UI`) — but BJ-WAL-18 asserts the ten-stage refusal ordering rather than
+ * enrolment, and its `ownedBy` already puts the rule in `custody/src/server.test.ts`.
+ */
 
 const NO_SIGNER: Blocker = {
   reason:
@@ -310,8 +336,8 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   scenario('BJ-WAL-13', B, 'Send: a policy challenge prompts MFA inline and continues', 'presentation', ['hub', 'policy', 'identity'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_MFA_UI }),
   scenario('BJ-WAL-14', B, 'Send: a policy review is shown as queued with a turnaround, not as failed', 'presentation', ['hub', 'policy'], { outcome: 'refusal', ownedBy: 'policy/src/server.test.ts', blocked: NO_POLICY_ON_WITHDRAWAL }),
   scenario('BJ-WAL-15', B, 'Send: retrying a stuck withdrawal twice produces one in-flight outbound', 'client-request', ['hub', 'wallet'], { blocked: NO_SETTLEABLE_ASSET }),
-  scenario('BJ-WAL-16', B, 'Receive: the address rendered is the address in the response', 'presentation', ['hub', 'wallet', 'custody'], { blocked: NO_CUSTODY_ADDRESS }),
-  scenario('BJ-WAL-18', B, 'Key export ceremony, all ten stages, each refused until the previous completed', 'presentation', ['hub', 'custody', 'identity'], { gate: true, outcome: 'refusal', ownedBy: 'custody/src/server.test.ts', blocked: NO_CUSTODY_ADDRESS }),
+  scenario('BJ-WAL-16', B, 'Receive: the address rendered is the address in the response', 'presentation', ['hub', 'wallet', 'custody'], {}),
+  scenario('BJ-WAL-18', B, 'Key export ceremony, all ten stages, each refused until the previous completed', 'presentation', ['hub', 'custody', 'identity'], { gate: true, outcome: 'refusal', ownedBy: 'custody/src/server.test.ts' }),
   scenario('BJ-WAL-19', B, 'Key export: cancel from the notification link needs no MFA, at any point', 'navigation', ['hub', 'custody', 'notify'], { blocked: NO_NOTIFY_UI }),
   scenario('BJ-WAL-21', B, 'Connect an external wallet: the closed five authorisations, granted separately', 'client-request', ['hub', 'wallet'], { blocked: NO_SIGNER }),
   scenario('BJ-WAL-22', B, 'An unverified external address is not offered as a withdrawal destination', 'presentation', ['hub', 'wallet'], { outcome: 'refusal', ownedBy: 'wallet/src/server.test.ts', blocked: NO_SIGNER }),

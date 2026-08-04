@@ -103,10 +103,15 @@ export const CLAIMS: readonly Claim[] = [
     status: 'unproven',
     journeys: [],
     gap:
-      'hub-web’s wallet page is read-only: no form, no button, no onClick, no mutation. There are ' +
-      'no send, receive or key-export screens anywhere in the estate to be the same as each other ' +
-      '(doc 22 §8.2). The route-inventory half is a tier-2 assertion and belongs in the frontend ' +
-      'repositories, not here.',
+      'THE PREMISE THAT STOOD HERE WAS FALSE AND IS CORRECTED: this row said "hub-web’s wallet ' +
+      'page is read-only: no form, no button, no onClick, no mutation", which src/browser/' +
+      'catalogue.ts had already disproved by driving it — the three mutations moved out of ' +
+      'wallet.tsx into components/send.tsx, receive.tsx and keyexport.tsx, so a grep of the page ' +
+      'still finds nothing while the screen renders all three. Send, receive and key-export ' +
+      'screens DO exist, in hub-web. What is still unproven is the claim itself, which is that ' +
+      'they are the SAME screens whichever product you came from: BJ-XS-03 is the scenario for ' +
+      'it, it is unblocked, and src/browser/journeys.ts names it in unimplemented(). The ' +
+      'route-inventory half is a tier-2 assertion and belongs in the frontend repositories.',
   },
   {
     n: 4,

@@ -21,6 +21,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  ECOSYSTEM_DEPOSIT_ADDRESS,
   ECOSYSTEM_EVENT_BUS,
   ECOSYSTEM_ONE_ACCOUNT,
   ECOSYSTEM_ONE_ACTIVITY,
@@ -29,9 +30,9 @@ import {
   ecosystemJourneys,
 } from './ecosystem.ts'
 import { runJourney, type JourneyDefinition, type JourneyRun } from './journeys.ts'
-import { fakeEstate, type FakeEstate, type FakeRequest } from './testsupport.ts'
+import { fakeEstate, type FakeEstate, type FakeReply, type FakeRequest } from './testsupport.ts'
 
-const SERVICES = ['identity', 'activity', 'hub-api', 'ledger']
+const SERVICES = ['identity', 'activity', 'hub-api', 'ledger', 'wallet', 'custody']
 
 interface Record_ {
   id: string
@@ -50,7 +51,34 @@ interface Estate extends FakeEstate {
   portfolio: Record<string, unknown>
   /** Set to break the pass-through independently of the source. */
   hubPortfolio: Record<string, unknown> | null
+  /** Every deposit assignment the fake wallet has minted, by `${userId}:${assetCode}`. */
+  readonly assignments: Map<string, Record<string, unknown>>
+  /** Every key the fake custody holds, by address. */
+  readonly custodyKeys: Map<string, Record<string, unknown>>
+  /**
+   * Override custody's answer for `GET /v1/addresses/:address`.
+   *
+   * A knob rather than `estate.route(...)`, because the address is minted DURING the journey and
+   * a test cannot name the path in advance. `authorised` is false when the request carried no
+   * bearer token, so the refusal half can be broken independently of the read half.
+   */
+  custodyRead: ((address: string, authorised: boolean) => FakeReply) | null
 }
+
+/**
+ * The assets that settle on a chain, and the chain each settles on.
+ *
+ * Read out of `CHAIN_FOR_ASSET` in `wallet/src/addresses.ts`, not invented: a fake that called
+ * SHARD depositable would prove the journey handles a case the estate cannot produce, and a fake
+ * that called EMBER undepositable would make the happy path untestable for the wrong reason.
+ */
+const DEPOSITABLE: ReadonlyMap<string, string> = new Map([
+  ['EMBER', 'ember'],
+  ['ETH', 'eth'],
+  ['BTC', 'btc'],
+  ['SOL', 'sol'],
+  ['XRP', 'xrp'],
+])
 
 /**
  * An estate whose bus works.
@@ -77,7 +105,17 @@ async function healthyEstate(): Promise<Estate> {
     ember: '0',
   }
 
-  const estate: Estate = Object.assign(base, { feed, portfolio, hubPortfolio: null })
+  const assignments = new Map<string, Record<string, unknown>>()
+  const custodyKeys = new Map<string, Record<string, unknown>>()
+
+  const estate: Estate = Object.assign(base, {
+    feed,
+    portfolio,
+    hubPortfolio: null,
+    assignments,
+    custodyKeys,
+    custodyRead: null as Estate['custodyRead'],
+  })
 
   const bearer = (req: FakeRequest): { id: string; handle: string } | null => {
     const header = req.headers['authorization'] ?? ''
@@ -154,6 +192,102 @@ async function healthyEstate(): Promise<Estate> {
     const header = req.headers['authorization'] ?? ''
     if (!header.startsWith('Bearer cfsc_')) return { status: 401, body: { error: { code: 'unauthenticated' } } }
     return { status: 201, body: { token: 'svc_tok', jti: 'j', service: 'beacon', scopes: ['ledger:read'], expiresIn: 600 } }
+  })
+
+  /* -------------------------------------------------- wallet and custody, as they really answer
+   *
+   * Every shape below was read off the running dev estate on 2026-08-04, through the gateway, with
+   * a user's own token — `POST pay.<apex>/v1/deposits {"assetCode":"EMBER"}` → 201
+   * `{assignment:{id,userId,assetCode,chain,network,walletId,address,custodyKeyUrn,status,
+   * assignedAt,rotatedAt,supersedesId,watchedAt}}`, and `GET vault.<apex>/v1/addresses/:address`
+   * → 200 `{key:{address,chain,family,purpose,network,scheme,derivationPath,status,keyVersion,
+   * createdAt,exportedAt}}`. Custody's own route publishes neither `userId` nor `orderId`
+   * (`custody/src/server.ts`, the comment above `GET /v1/addresses/:address`), so the fake does
+   * not either — a fake that served them would let a journey assert something it cannot see.
+   */
+
+  const mint = (userId: string, assetCode: string, chain: string): Record<string, unknown> => {
+    const n = next++
+    const address = `0x${n.toString(16).padStart(40, 'a')}`
+    const assignmentId = `019fcc6f-2da8-7000-8ee0-${String(n).padStart(12, '0')}`
+    custodyKeys.set(address, {
+      address,
+      chain,
+      family: 'evm',
+      purpose: 'deposit',
+      network: 'testnet',
+      scheme: 'hd_bip44',
+      derivationPath: "m/44'/1'/0'/0/0",
+      status: 'active',
+      keyVersion: 1,
+      createdAt: new Date().toISOString(),
+      exportedAt: null,
+    })
+    // Custody's real read route is `GET /v1/addresses/:address` and the fake router matches exact
+    // paths, so the route is installed as the address is minted. The journey learns the address
+    // from wallet's reply, exactly as a client does.
+    base.route(`GET /v1/addresses/${address}`, (req) => {
+      const authorised = (req.headers['authorization'] ?? '').startsWith('Bearer ')
+      if (estate.custodyRead) return estate.custodyRead(address, authorised)
+      // Custody answers 404 rather than 401/403 to a caller who does not own the key — "a 403
+      // confirms the address exists". An unauthenticated caller never gets that far.
+      if (!authorised) return { status: 401, body: { error: { code: 'unauthenticated' } } }
+      const key = custodyKeys.get(address)
+      if (!key) return { status: 404, body: { error: { code: 'not_found' } } }
+      return { status: 200, body: { key } }
+    })
+    return {
+      id: assignmentId,
+      userId,
+      assetCode,
+      chain,
+      network: 'testnet',
+      walletId: `019fcc6f-2f49-7000-97d2-${String(n).padStart(12, '0')}`,
+      address,
+      custodyKeyUrn: `cf:custody:key:${chain}:testnet:${address}`,
+      status: 'active',
+      assignedAt: new Date().toISOString(),
+      rotatedAt: null,
+      supersedesId: null,
+      watchedAt: new Date().toISOString(),
+    }
+  }
+
+  base.route('POST /v1/deposits', (req) => {
+    const account = bearer(req)
+    if (!account) return { status: 401, body: { error: { code: 'unauthenticated' } } }
+    const assetCode = String(req.body['assetCode'] ?? '').toUpperCase()
+    const chain = DEPOSITABLE.get(assetCode)
+    if (!chain) {
+      return {
+        status: 400,
+        body: {
+          error: {
+            code: 'not_depositable',
+            message: `${assetCode} does not settle on a chain and has no deposit address`,
+          },
+        },
+      }
+    }
+    // Find-or-create, which is `assignDepositAddress`'s own shape and — because custody honours no
+    // idempotency key — the ONLY thing that stops a retry minting a second address.
+    const key = `${account.id}:${assetCode}`
+    const existing = assignments.get(key)
+    if (existing) return { status: 201, body: { assignment: existing } }
+    const assignment = mint(account.id, assetCode, chain)
+    assignments.set(key, assignment)
+    return { status: 201, body: { assignment } }
+  })
+
+  base.route('GET /v1/deposits', (req) => {
+    const account = bearer(req)
+    if (!account) return { status: 401, body: { error: { code: 'unauthenticated' } } }
+    return {
+      status: 200,
+      body: {
+        assignments: [...assignments.values()].filter((a) => a['userId'] === account.id),
+      },
+    }
   })
 
   base.route('GET /trial-balance', (req) => {
@@ -484,6 +618,222 @@ test('ecosystem.trial-balance goes red when the ledger serves it unauthenticated
     } finally {
       delete process.env['BEACON_SERVICE_CREDENTIAL']
     }
+  })
+})
+
+/* ------------------------------------------------------------------ ecosystem.deposit-address */
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE FIRST TEST BELOW IS THE ONE THIS JOURNEY EXISTS FOR.**
+ *
+ * `POST /v1/deposits` answered 500 on the live estate for the whole life of the service, and
+ * nothing anywhere reported it. The estate below is broken in exactly that way — wallet answers
+ * 500 `{"error":{"code":"internal"}}` because custody refused its own call — and the journey is
+ * required to report `fail` and to name the step. Every other test here breaks ONE other property
+ * and demands the same, because "a deposit address is provisioned" is otherwise one `assert(201)`
+ * away from a check that passes against a route that hands out the same address to everybody.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+
+test('ecosystem.deposit-address passes when an address is provisioned and custody holds it', async () => {
+  await withEstate(async (estate) => {
+    const result = await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate)
+    assert.equal(result.status, 'pass', String(result.error))
+    // The journey must have MOVED something: a pass over an estate where nothing was minted would
+    // be the check that cannot fail, arrived at from the fake's side instead of the journey's.
+    assert.equal(estate.assignments.size, 1)
+    assert.equal(estate.custodyKeys.size, 1)
+  })
+})
+
+test('THE ORIGINAL DEFECT: ecosystem.deposit-address goes red when POST /v1/deposits answers 500', async () => {
+  await withEstate(async (estate) => {
+    // Verbatim what the estate served until 2026-08-04, recorded in `conformance`'s micro-wallet
+    // header: wallet threw `CustodyRefusedError` on `POST http://custody:4000/v1/addresses → 400`
+    // because it sent no `orderId`, nothing caught it, and the generic handler served `internal`.
+    estate.route('POST /v1/deposits', () => ({
+      status: 500,
+      body: { error: { code: 'internal', message: 'the request could not be completed' } },
+    }))
+    assertFailedAt(await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate), 'provision a deposit address')
+  })
+})
+
+test('ecosystem.deposit-address goes red when wallet answers 201 with no address', async () => {
+  await withEstate(async (estate) => {
+    // A 201 carrying nothing to send money to is a funding page with an empty box on it, and a
+    // journey that asserted only the status would call it green.
+    const inner = estate.handlerFor('POST /v1/deposits')!
+    estate.route('POST /v1/deposits', (req) => {
+      const reply = inner(req)
+      if (reply.status !== 201) return reply
+      const body = reply.body as { assignment: Record<string, unknown> }
+      return { status: 201, body: { assignment: { ...body.assignment, address: '' } } }
+    })
+    assertFailedAt(await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate), 'provision a deposit address')
+  })
+})
+
+test('ecosystem.deposit-address goes red when the address belongs to a different account', async () => {
+  await withEstate(async (estate) => {
+    const inner = estate.handlerFor('POST /v1/deposits')!
+    estate.route('POST /v1/deposits', (req) => {
+      const reply = inner(req)
+      if (reply.status !== 201) return reply
+      const body = reply.body as { assignment: Record<string, unknown> }
+      // One missing predicate in a find-or-create is how a funding page shows somebody else's
+      // address, which is the worst outcome this route has.
+      return { status: 201, body: { assignment: { ...body.assignment, userId: 'someone-else' } } }
+    })
+    assertFailedAt(await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate), 'provision a deposit address')
+  })
+})
+
+test('ecosystem.deposit-address goes red when the URN names an address other than the one served', async () => {
+  await withEstate(async (estate) => {
+    const inner = estate.handlerFor('POST /v1/deposits')!
+    estate.route('POST /v1/deposits', (req) => {
+      const reply = inner(req)
+      if (reply.status !== 201) return reply
+      const body = reply.body as { assignment: Record<string, unknown> }
+      return {
+        status: 201,
+        body: {
+          assignment: {
+            ...body.assignment,
+            custodyKeyUrn: 'cf:custody:key:ember:testnet:0x0000000000000000000000000000000000000000',
+          },
+        },
+      }
+    })
+    // The URN is the handle settlement and the export ceremony use to reach the key. One that
+    // names a different address is a row that dereferences to somebody else's key.
+    assertFailedAt(await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate), 'provision a deposit address')
+  })
+})
+
+test('THE SEAM: ecosystem.deposit-address goes red when custody does not hold the address', async () => {
+  await withEstate(async (estate) => {
+    // Wallet inventing an address, or filing one custody never minted, is invisible from wallet's
+    // own suite and from custody's — which is exactly why this journey is in this file. The whole
+    // original defect lived in this seam.
+    estate.custodyRead = () => ({ status: 404, body: { error: { code: 'not_found' } } })
+    assertFailedAt(await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate), 'custody holds the key that address names')
+  })
+})
+
+test('ecosystem.deposit-address goes red when custody holds the address for another purpose', async () => {
+  await withEstate(async (estate) => {
+    estate.custodyRead = (address) => ({
+      status: 200,
+      // `purpose` is one of the five fields custody compares before it signs. A deposit address
+      // filed under `settlement` is a key the sweep will refuse for ever.
+      body: { key: { ...estate.custodyKeys.get(address), purpose: 'settlement' } },
+    })
+    assertFailedAt(await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate), 'custody holds the key that address names')
+  })
+})
+
+test('ecosystem.deposit-address goes red when custody serves a key unauthenticated', async () => {
+  await withEstate(async (estate) => {
+    estate.custodyRead = (address, authorised) => {
+      void authorised
+      return { status: 200, body: { key: estate.custodyKeys.get(address) } }
+    }
+    assertFailedAt(
+      await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate),
+      'an unauthenticated read of the key is refused',
+    )
+  })
+})
+
+test('ecosystem.deposit-address goes red when asking twice mints a second address', async () => {
+  await withEstate(async (estate) => {
+    // On the estate as deployed, wallet's find-or-create is the ONLY thing standing between a
+    // retried provision and a second address nobody was told about: `custody_keys` there carries
+    // no `idempotency_key` column, whatever `custody/src/keys.ts` now does with one. The estate
+    // below therefore models the deployed shape, and the journey asserts the OUTCOME, so it keeps
+    // its meaning when custody's second guard ships and when a third replaces both.
+    //
+    // The find-or-create is removed rather than the reply forged: the estate below still mints a
+    // GENUINE second custody key on the second ask, which is what losing the check really does.
+    // Forging a second address custody does not hold would fail at the previous step instead and
+    // would prove nothing about this one.
+    const inner = estate.handlerFor('POST /v1/deposits')!
+    estate.route('POST /v1/deposits', (req) => {
+      estate.assignments.clear()
+      return inner(req)
+    })
+    assertFailedAt(
+      await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate),
+      'asking again returns the same address, not a second one',
+    )
+  })
+})
+
+test('ecosystem.deposit-address goes red when the assignment is not listed back', async () => {
+  await withEstate(async (estate) => {
+    // Provisioned and not readable is a user who cannot find the address they were just given.
+    estate.route('GET /v1/deposits', () => ({ status: 200, body: { assignments: [] } }))
+    assertFailedAt(await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate), 'the assignment is listed back')
+  })
+})
+
+test('ecosystem.deposit-address goes red when an asset with no chain is given an address', async () => {
+  await withEstate(async (estate) => {
+    const inner = estate.handlerFor('POST /v1/deposits')!
+    estate.route('POST /v1/deposits', (req) => {
+      if (String(req.body['assetCode'] ?? '') !== 'EMBER') {
+        // A Shard deposit address would be an address on no chain — money sent to a place that
+        // cannot credit it. The refusal is the feature.
+        return inner({ ...req, body: { assetCode: 'EMBER' } })
+      }
+      return inner(req)
+    })
+    assertFailedAt(
+      await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate),
+      'an asset that does not settle on a chain is refused',
+    )
+  })
+})
+
+test('ecosystem.deposit-address goes red when an anonymous caller can provision an address', async () => {
+  await withEstate(async (estate) => {
+    const inner = estate.handlerFor('POST /v1/deposits')!
+    estate.route('POST /v1/deposits', (req) => {
+      if (!(req.headers['authorization'] ?? '').startsWith('Bearer ')) {
+        return { status: 201, body: { assignment: { id: 'x', address: '0x00' } } }
+      }
+      return inner(req)
+    })
+    assertFailedAt(
+      await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate),
+      'an unauthenticated provision is refused',
+    )
+  })
+})
+
+test('ecosystem.deposit-address SKIPS rather than fails when the estate runs no custody', async () => {
+  await withEstate(async (estate) => {
+    // A journey pointed at a service this deployment does not run has demonstrated nothing, which
+    // is what skip means. It is never green — the metric emits 0.5 and the objective counts it
+    // against the journey exactly as a failure would.
+    const targets = new Map(estate.targets)
+    targets.delete('custody')
+    const result = await runJourney(ECOSYSTEM_DEPOSIT_ADDRESS, { targets, deadlineMs: 30_000 })
+    assert.equal(result.status, 'skip', String(result.error))
+    assert.match(String(result.error), /custody/)
+  })
+})
+
+test('ecosystem.deposit-address mints ONE address per run, whatever else it asks for', async () => {
+  await withEstate(async (estate) => {
+    assert.equal((await run(ECOSYSTEM_DEPOSIT_ADDRESS, estate)).status, 'pass')
+    // The accumulation budget, asserted rather than described. This journey runs every five
+    // minutes for ever; one custody key per run is the number its header commits to, and the
+    // second `POST /v1/deposits` it makes is precisely what proves that number is one and not two.
+    assert.equal(estate.custodyKeys.size, 1)
   })
 })
 

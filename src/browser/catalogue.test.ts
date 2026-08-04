@@ -109,9 +109,16 @@ test('THE UNBLOCKED SET IS PINNED, BECAUSE REMOVING A BLOCKER IS A CLAIM ABOUT T
   //     still has no button, rather than against the screen, which does. BJ-WAL-08 and
   //     BJ-WAL-09 are now implemented; BJ-XS-03 is unblocked and not yet written.
   //
+  //   * TWO MORE WALLET ROWS — BJ-WAL-16 and BJ-WAL-18 — because `NO_CUSTODY_ADDRESS` was
+  //     re-driven and its premise had stopped being true. It said POST /v1/deposits answers 500;
+  //     it now answers 201 with an address custody serves back at GET /v1/addresses/:address.
+  //     That blocker was CORRECT when written and was falsified by the estate being repaired,
+  //     which is the shape of staleness nothing here was watching for — see the note above
+  //     `NO_SIGNER` in catalogue.ts. `ecosystem.deposit-address` now drives it on a schedule.
+  //
   // The rows that stay blocked moved to blockers naming what was actually found: no fee is
-  // configured for any asset, custody refuses to mint an address, there is no signer in any
-  // bundle, and the withdrawal path consults no policy service. Each was driven.
+  // configured for any asset, there is no signer in any bundle, there is no MFA enrolment screen,
+  // and the withdrawal path consults no policy service. Each was driven.
   //
   // This list was six. It is now sixty-one, because three blockers were removed after being disproved
   // in Chromium against the running estate — see the note above `NO_WALLET_WRITE` in catalogue.ts
@@ -130,7 +137,7 @@ test('THE UNBLOCKED SET IS PINNED, BECAUSE REMOVING A BLOCKER IS A CLAIM ABOUT T
     'BJ-MKT-12', 'BJ-NET-09', 'BJ-NET-14', 'BJ-NET-18', 'BJ-NET-20', 'BJ-NET-21',
     'BJ-TRD-02', 'BJ-TRD-03', 'BJ-TRD-04', 'BJ-TRD-06', 'BJ-TRD-12', 'BJ-TRD-13',
     'BJ-FOR-01', 'BJ-FOR-06', 'BJ-FOR-13', 'BJ-FOR-14', 'BJ-FOR-17',
-    'BJ-WAL-01', 'BJ-WAL-08', 'BJ-WAL-09', 'BJ-WLD-05', 'BJ-XS-01', 'BJ-XS-03',
+    'BJ-WAL-01', 'BJ-WAL-08', 'BJ-WAL-09', 'BJ-WAL-16', 'BJ-WAL-18', 'BJ-WLD-05', 'BJ-XS-01', 'BJ-XS-03',
     'BJ-XS-04', 'BJ-XS-05', 'BJ-XS-10',
     'BJ-XS-13', 'BJ-XS-14',
   ].sort())

@@ -39,12 +39,16 @@ function journey(name: string, service: string): JourneyDefinition {
   }
 }
 
-const ELEVEN: readonly JourneyDefinition[] = [
+const REGISTRY: readonly JourneyDefinition[] = [
   journey('ecosystem.one-account', 'identity'),
   journey('ecosystem.one-portfolio', 'hub-api'),
   journey('ecosystem.one-activity', 'hub-api'),
   journey('ecosystem.trial-balance', 'ledger'),
   journey('ecosystem.event-bus', 'activity'),
+  // The twelfth, added 2026-08-04 with the journey itself. Its owning service is `wallet` and NOT
+  // `ecosystem`, which is the fact `the owning service comes from the definition` below turns into
+  // an assertion — this is now the third name in the table whose prefix is not a service.
+  journey('ecosystem.deposit-address', 'wallet'),
   journey('identity.signin', 'identity'),
   journey('identity.register', 'identity'),
   journey('identity.handoff', 'identity'),
@@ -53,7 +57,7 @@ const ELEVEN: readonly JourneyDefinition[] = [
   journey('estate.reachable', 'beacon'),
 ]
 
-const NAMES = ELEVEN.map((j) => j.name)
+const NAMES = REGISTRY.map((j) => j.name)
 
 /* ------------------------------------------------------------------ the owner's decision */
 
@@ -84,10 +88,25 @@ test('the owner set 95% on the other six', () => {
   }
 })
 
-test('the table names exactly eleven journeys and no more', () => {
-  // An objective nobody agreed to is the thing three agents refused to write. A twelfth entry
+test('the twelfth carries 95%, and is marked as the one the owner has not ruled on', () => {
+  // Kept OUT of the test above, deliberately. That one asserts a decision the owner made; this
+  // asserts a number chosen under the owner's stated rule while the owner's own has not been set.
+  // Folding them together would launder the second into the first, and the whole reason `slos` sat
+  // empty for the life of the estate was that nobody would do exactly that.
+  assert.equal(OBJECTIVES['ecosystem.deposit-address']?.objectivePpm, 950_000n)
+  assert.equal(OBJECTIVES['ecosystem.deposit-address']?.tier, 2)
+})
+
+test('the table names exactly twelve journeys and no more', () => {
+  // An objective nobody agreed to is the thing three agents refused to write. A thirteenth entry
   // appearing without this test being updated is that happening quietly.
-  assert.equal(Object.keys(OBJECTIVES).length, 11)
+  //
+  // It was eleven. The twelfth is `ecosystem.deposit-address`, and the reason it is here at all
+  // is that `plan()` refuses to seed ANY row when one registered journey has no objective — so
+  // omitting it would have emptied the table this file exists to keep full. The number it carries
+  // is the owner's 95%, chosen by the owner's own stated rule for that group rather than by the
+  // journey's name prefix; `sloseed.ts` records the reasoning at the row.
+  assert.equal(Object.keys(OBJECTIVES).length, 12)
 })
 
 test('every objective is inside the range the database will accept', () => {
@@ -101,8 +120,8 @@ test('every objective is inside the range the database will accept', () => {
 /* ------------------------------------------------------------------ the plan */
 
 test('plans one journey SLO per registered journey', () => {
-  const planned = plan(ELEVEN, NAMES)
-  assert.equal(planned.length, 11)
+  const planned = plan(REGISTRY, NAMES)
+  assert.equal(planned.length, 12)
   for (const slo of planned) {
     assert.equal(slo.kind, JOURNEY_SLO_KIND)
     assert.equal(slo.windowDays, WINDOW_DAYS)
@@ -119,20 +138,24 @@ test('THE SLO NAME IS THE ONE jobs.ts WRITES OBSERVATIONS AGAINST', () => {
 })
 
 test('the owning service comes from the definition, never from the name', () => {
-  const planned = plan(ELEVEN, NAMES)
+  const planned = plan(REGISTRY, NAMES)
   const byName = new Map(planned.map((slo) => [slo.name, slo.service]))
   // The three that prove it. Slicing the name at the dot would give `ecosystem` and `estate`,
   // neither of which is a service this estate runs.
   assert.equal(byName.get('ecosystem.trial-balance.runs'), 'ledger')
   assert.equal(byName.get('ecosystem.event-bus.runs'), 'activity')
   assert.equal(byName.get('estate.reachable.runs'), 'beacon')
+  // The fourth, and the newest. Its budget belongs to `wallet` — the service that owns the route
+  // and has to produce the joined-up answer — not to a service called `ecosystem`, which is a
+  // budget nobody owns.
+  assert.equal(byName.get('ecosystem.deposit-address.runs'), 'wallet')
 })
 
 test('REFUSES to seed when a registered journey has no objective', () => {
   // A seeder that skipped what it did not recognise would be the empty table again, one journey at
   // a time — and the journey it skipped would silently violate the foreign key for ever after.
   assert.throws(
-    () => plan([...ELEVEN, journey('wallet.deposit', 'wallet')], [...NAMES, 'wallet.deposit']),
+    () => plan([...REGISTRY, journey('wallet.deposit', 'wallet')], [...NAMES, 'wallet.deposit']),
     (err: unknown) => err instanceof SloSeedError && /no objective has been set/.test(err.message),
   )
 })
@@ -141,14 +164,14 @@ test('REFUSES to seed an objective whose journey the estate is not running', () 
   // The other half. An SLO with no journey reports error_budget_no_data for ever, which is an
   // UNKNOWN, which refuses every release on behalf of something nobody is running.
   assert.throws(
-    () => plan(ELEVEN, NAMES.filter((name) => name !== 'worlds.registry')),
+    () => plan(REGISTRY, NAMES.filter((name) => name !== 'worlds.registry')),
     (err: unknown) => err instanceof SloSeedError && /has not registered/.test(err.message),
   )
 })
 
 test('refuses a journey the estate runs but this build cannot describe', () => {
   assert.throws(
-    () => plan(ELEVEN.slice(1), NAMES),
+    () => plan(REGISTRY.slice(1), NAMES),
     (err: unknown) => err instanceof SloSeedError && /cannot describe/.test(err.message),
   )
 })
@@ -158,20 +181,20 @@ test('refuses a journey the estate runs but this build cannot describe', () => {
 test('objectivePpm goes on the wire as a STRING', () => {
   // The route refuses a number, and it is right to: an objective sent as a JSON float has already
   // been rounded by whatever produced it.
-  const body = bodyFor(plan(ELEVEN, NAMES)[0]!)
+  const body = bodyFor(plan(REGISTRY, NAMES)[0]!)
   assert.equal(typeof body['objectivePpm'], 'string')
   assert.equal(body['objectivePpm'], '990000')
 })
 
 test('seed reports each failure rather than throwing on the first', async () => {
-  // Eleven PUTs against nothing listening. The point is the shape of the report: a seeder that
+  // Twelve PUTs against nothing listening. The point is the shape of the report: a seeder that
   // threw part-way would leave an operator with a stack trace and no statement of which rows exist.
-  const results = await seed(plan(ELEVEN, NAMES), {
+  const results = await seed(plan(REGISTRY, NAMES), {
     baseUrl: 'http://127.0.0.1:1/',
     headers: {},
     timeoutMs: 2_000,
   })
-  assert.equal(results.length, 11)
+  assert.equal(results.length, 12)
   assert.ok(results.every((result) => !result.ok))
   assert.ok(results.every((result) => result.error !== null))
 })

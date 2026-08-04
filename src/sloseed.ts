@@ -75,6 +75,24 @@ export const OBJECTIVES: Readonly<Record<string, Objective>> = Object.freeze({
   'ecosystem.one-activity': { tier: 1, objectivePpm: PPM_99 },
   'ecosystem.trial-balance': { tier: 1, objectivePpm: PPM_99 },
   'ecosystem.event-bus': { tier: 1, objectivePpm: PPM_99 },
+  // ── TIER 2, AND THE ONE ROW IN THIS TABLE THE OWNER DID NOT SET DIRECTLY ────────────────────
+  //
+  // Added 2026-08-04 with `ecosystem.deposit-address`. `plan()` throws on a registered journey
+  // with no objective, so leaving it out would not be neutral: the seeder would refuse EVERY row
+  // and the estate would go back to the empty `slos` table this file's header describes at
+  // length. Silence is not an option here, so the choice is which of the owner's two numbers.
+  //
+  // 95% rather than 99%, applying the owner's own stated rule rather than the `ecosystem.` prefix.
+  // The header says the second group's 95% is "a deliberate loosening for journeys that depend on
+  // estate configuration this deployment may not carry", and this journey is exactly that: it
+  // needs `wallet` and `custody` addresses in `BEACON_TARGETS` and an indexer that accepts a watch
+  // registration, none of which every deployment has. Choosing 99% by prefix would be deriving an
+  // objective "from the tier of a journey that looks similar", which the error message below
+  // refuses in as many words.
+  //
+  // It is a placeholder for a decision, not a decision: the journey is non-critical and has no
+  // history, and the owner's number replaces this the moment there is one.
+  'ecosystem.deposit-address': { tier: 2, objectivePpm: PPM_95 },
   'identity.signin': { tier: 2, objectivePpm: PPM_95 },
   'identity.register': { tier: 2, objectivePpm: PPM_95 },
   'identity.handoff': { tier: 2, objectivePpm: PPM_95 },

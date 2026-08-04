@@ -258,13 +258,22 @@ withdraw, mint deploy, market purchase.
 | `estate.reachable` | yes | implemented |
 | `market.catalogue` | no | implemented |
 | `worlds.registry` | no | implemented |
-| `deposit`, `convert`, `spend`, `withdraw`, `mint deploy`, `market purchase` | — | **absent, not stubbed** |
+| `deposit` | — | **half of it now exists** — `ecosystem.deposit-address`, below |
+| `convert`, `spend`, `withdraw`, `mint deploy`, `market purchase` | — | **absent, not stubbed** |
 
-The five money journeys are absent rather than declared-and-skipping, and that is the safe choice in
-both directions. A declared-but-skipping critical journey would refuse every release for ever,
-because a skip is not a pass — and a gate that refuses everything is a gate that gets switched off
-within a week. A declared-but-faked journey would report green and make the gate a lie, which is
+The remaining money journeys are absent rather than declared-and-skipping, and that is the safe
+choice in both directions. A declared-but-skipping critical journey would refuse every release for
+ever, because a skip is not a pass — and a gate that refuses everything is a gate that gets switched
+off within a week. A declared-but-faked journey would report green and make the gate a lie, which is
 worse than not having one. Adding a real one is this file plus one row.
+
+**`deposit` is the one that moved, and only halfway.** Deposit provisioning is the single way money
+enters this platform — payments here are crypto-native and balances are funded by on-chain deposit
+only — and `POST /v1/deposits` answered 500 for the whole life of the service without anything
+noticing. `deposit` was named in the critical-path set above and in `journeys.ts`, and nothing in
+this repository drove any part of it. `ecosystem.deposit-address` now drives provisioning end to end
+against wallet AND custody. **It does not deposit**: crediting one needs an on-chain transfer and
+the indexer's confirmation depth, which no journey can produce on demand, so the row stays open.
 
 **Two of the six could only ever fail, and there were no tests here at all.** Found on 2026-08-03
 by running them against the dev estate:
@@ -295,6 +304,7 @@ could assert it, it does not belong there.
 | `ecosystem.one-activity` | activity and hub-api serve the same record byte for byte, with the cursor passed back unparsed | yes |
 | `ecosystem.one-portfolio` | hub's two paths to one portfolio total — the dashboard tile and the portfolio page, separately cached — agree on the whole payload including `pricedAt` | yes |
 | `ecosystem.one-account` | one access token resolves to one subject in identity, hub-api and activity, and none of the three serves without it | yes |
+| `ecosystem.deposit-address` | `POST /v1/deposits` provisions a real address, **custody is holding the key it names**, and asking twice does not mint a second one | yes — needs `wallet` and `custody` in `BEACON_TARGETS` |
 | `ecosystem.trial-balance` | Σ debits − Σ credits is exactly zero **over a journal with entries in it** | **only with `BEACON_SERVICE_CREDENTIAL`** |
 
 `ecosystem.trial-balance` is absent rather than skipping because beacon cannot hold a credential
@@ -310,8 +320,29 @@ never recorded an entry is the same defect as a CI job that builds an image and 
 them, with a cited blocker where none does. Its test refuses a claim marked `partly` or `proven`
 that names no journey.
 
-All four declared ecosystem journeys were run against the dev estate on 2026-08-03 and pass —
-`event-bus` in 1.0s, `one-activity` in 0.8s, `one-portfolio` in 0.1s, `one-account` in 0.8s.
+All four of the original declared ecosystem journeys were run against the dev estate on 2026-08-03
+and pass — `event-bus` in 1.0s, `one-activity` in 0.8s, `one-portfolio` in 0.1s, `one-account` in
+0.8s.
+
+**`ecosystem.deposit-address` is the fifth, added 2026-08-04, and it is the one this section is
+worth reading for.** `POST /v1/deposits` — the single way money enters a crypto-native platform —
+answered 500 to every caller for the whole life of the service, because wallet never sent the
+`orderId` custody requires and nothing caught the resulting refusal. Every layer of observability
+missed it: `deposit` was named in the critical-path set and driven by nothing, and the conformance
+corpus deliberately excluded the happy path *because* it was broken, which is correct at the time
+and becomes a permanent blind spot the moment the route is fixed.
+
+It is **not critical**, deliberately, and for the reason `ecosystem.event-bus` records: a critical
+journey refuses every release from the moment it is declared, and this one has no history in any
+deployment. It is promoted once its own flake rate is a number rather than an assumption.
+
+**What one run leaves behind: one custody key, one managed wallet row, one assignment and one
+indexer watch.** One and not two, and the second `POST /v1/deposits` the journey makes is what
+guarantees that — custody honours no idempotency key, so wallet's find-or-create is the whole
+protection against a retry minting twice, and this journey is the only thing asserting it. At a
+five-minute cadence that is ~288 addresses a day; nothing in the estate deletes them.
+
+    delete from custody_keys where user_id in (select id from users where email like 'beacon+%');
 
 #### What running them found, that is not beacon's to fix
 

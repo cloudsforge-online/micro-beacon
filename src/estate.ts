@@ -384,6 +384,10 @@ export const ESTATE_SERVICES: readonly string[] = [
   // activity to be reachable. A name here costs nothing when the deployment does not run the
   // service — `estate.reachable` skips a target it has no address for.
   'activity',
+  // Added with `ecosystem.deposit-address`, which is the first journey in this repository that
+  // dials custody. `wallet` was already named here and had no address configured, so this journey
+  // is also the first thing that makes either of them a real target rather than a listed one.
+  'custody',
 ]
 
 /** The six per-service journeys, before the cross-service ones are added. */
