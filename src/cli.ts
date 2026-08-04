@@ -50,10 +50,10 @@ beacon slo-seed --url <base> [--bearer <jwt> | --token <token>] [--dry-run]
   meant to run on every deploy. Refuses outright if any journey has no objective, rather
   than seeding the ones it recognises.
 
-  --bearer    an identity access token for an admin. Preferred: PUT /v1/slos/:name is
-              adminOnly, and the static token short-circuits that check before it is
-              reached, so only a bearer exercises the route's own authorisation.
-  --token     the x-beacon-token credential. Defaults to BEACON_TOKEN.
+  --bearer    an identity access token for an admin. REQUIRED in practice: PUT /v1/slos/:name
+              is adminOnly, and the static token is no longer accepted as an administrator,
+              so seeding with --token alone now gets a 403.
+  --token     the x-beacon-token credential. Defaults to BEACON_TOKEN. Not sufficient here.
   --dry-run   print the plan and dial nothing. Needs no estate and no credential.
 
 exit codes: 0 every objective registered · 1 one or more refused · 2 bad arguments, or a
@@ -613,11 +613,14 @@ export interface SloSeedArgs {
  * `--token` is the static `x-beacon-token`; `--bearer` is an identity access token.
  *
  * Both are accepted and the bearer is preferred when both are given, because `PUT /v1/slos/:name`
- * is declared `adminOnly` and the two credentials satisfy that declaration differently: a bearer
- * is checked against `isAdmin`, and the static token short-circuits `authorise` before the
- * `adminOnly` branch is reached at all (`server.ts`, `authorise`). Seeding with a real admin
- * identity is therefore the only way this command exercises the check the route claims to make —
- * which is the point of going through the front door rather than issuing an INSERT.
+ * is declared `adminOnly` and only a bearer can satisfy that: `authorise` checks a bearer against
+ * `isAdmin`, and the static token does not count as an administrator on any route (`server.ts`,
+ * `authorise`). Seeding therefore needs a real admin identity — which is the point of going
+ * through the front door rather than issuing an INSERT.
+ *
+ * `--token` is still accepted rather than removed, because it is what a caller reaches for and a
+ * 403 naming `role:admin` says what to do next; silently rejecting the flag at parse time would
+ * turn a clear server answer into "bad arguments".
  */
 export function parseSloSeedArgs(
   args: readonly string[],

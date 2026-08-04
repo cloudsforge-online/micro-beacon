@@ -590,4 +590,158 @@ describe('the http surface', { skip }, () => {
     })
     assert.equal(response.status, 400)
   })
+
+  /* ------------------------------------------------- the break-glass token is not an admin */
+
+  /**
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   * ONE STATIC SHARED SECRET MUST NOT BE A FULL ADMINISTRATIVE CREDENTIAL.
+   *
+   * `BEACON_TOKEN` is a long-lived value sitting in the estate compose file, in Prometheus's
+   * secrets directory and in CI. Four routes are declared `adminOnly`, and until this section
+   * existed all four admitted it: `authorise` returned on the token match BEFORE the `adminOnly`
+   * branch was reached, so the declaration was decorative on exactly the routes that decide
+   * whether a release may ship.
+   *
+   * Each case below is a route that answered 2xx to the static token before the fix. They are the
+   * proof, not the guard — the guards are the section underneath.
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   */
+
+  it('REFUSES a gate override to the static break-glass token', async () => {
+    const response = await call('/v1/gate/overrides', {
+      method: 'POST',
+      token: TOKEN,
+      body: {
+        release: 'v1',
+        reasonCode: 'journey_failing',
+        reason: 'holding the shared secret is not being an administrator',
+        ttlMs: 3_600_000,
+      },
+    })
+    // 403 rather than 401: the credential WAS recognised, and an operator who gets a bare 401
+    // here retries with the same token instead of reaching for an identity.
+    assert.equal(response.status, 403)
+    const body = (await response.json()) as { error?: { code?: string; message?: string } }
+    assert.equal(body.error?.code, 'forbidden')
+    // Names what is missing. "role:admin" is what sends an operator to an identity rather than
+    // back to the same token.
+    assert.match(body.error?.message ?? '', /role:admin/)
+    // Nothing was written. A 403 that still recorded the override would be worse than no check.
+    const rows = (await sql`select count(*)::int as n from gate_overrides`) as unknown as {
+      n: number
+    }[]
+    assert.equal(rows[0]?.n, 0)
+  })
+
+  it('REFUSES a probe write to the static break-glass token', async () => {
+    const response = await call('/v1/probes/market.livez', {
+      method: 'PUT',
+      token: TOKEN,
+      body: {
+        target: 'market',
+        productGroup: 'Market',
+        url: 'http://market:4000/livez',
+        intervalMs: 30_000,
+        deadlineMs: 5_000,
+      },
+    })
+    assert.equal(response.status, 403)
+    const rows = (await sql`select count(*)::int as n from probes`) as unknown as { n: number }[]
+    assert.equal(rows[0]?.n, 0)
+  })
+
+  it('REFUSES a journey mute to the static break-glass token', async () => {
+    // The one that matters most. A mute silences a journey, and a silenced journey is a green
+    // gate — so a credential that can mute is a credential that can approve its own release.
+    await syncRegistry(db(sql), [fakeJourney('identity.register', async () => {})])
+    const response = await call('/v1/journeys/identity.register/mute', {
+      method: 'POST',
+      token: TOKEN,
+      body: { muted: true, reason: 'silencing the thing that is watching me' },
+    })
+    assert.equal(response.status, 403)
+    const rows = (await sql`select muted from journeys`) as unknown as { muted: boolean }[]
+    assert.equal(rows[0]?.muted, false)
+  })
+
+  it('REFUSES an SLO write to the static break-glass token', async () => {
+    const response = await call('/v1/slos/ledger.availability', {
+      method: 'PUT',
+      token: TOKEN,
+      body: { service: 'ledger', tier: 1, kind: 'availability', objectivePpm: '999500' },
+    })
+    assert.equal(response.status, 403)
+    const rows = (await sql`select count(*)::int as n from slos`) as unknown as { n: number }[]
+    assert.equal(rows[0]?.n, 0)
+  })
+
+  it('refuses EVERY adminOnly route to the static token, enumerated from one list', async () => {
+    // Enumerated rather than trusted to the four cases above: a fifth `adminOnly` route added
+    // later is the one nobody writes a case for. If this list and `server.ts` drift, that is a
+    // review finding — but a list of four that all pass is still four assertions, not zero.
+    const adminOnly: readonly [string, string][] = [
+      ['POST', '/v1/gate/overrides'],
+      ['PUT', '/v1/probes/some.probe'],
+      ['POST', '/v1/journeys/some.journey/mute'],
+      ['PUT', '/v1/slos/some.slo'],
+    ]
+    for (const [method, path] of adminOnly) {
+      const response = await call(path, { method, token: TOKEN, body: {} })
+      assert.equal(response.status, 403, `${method} ${path} admitted the static token`)
+    }
+  })
+
+  /* ------------------------------------------------- and it keeps everything it is deployed for */
+
+  /**
+   * Guards, not proof: these passed before the fix too. They are here because the cost of getting
+   * this wrong in the other direction is a blind Prometheus, an Alertmanager that cannot open an
+   * incident, and a CI job that cannot ask the gate — every one of them a holder of this token
+   * with no identity to fall back on.
+   */
+
+  it('still admits the static token to /metrics, the gate, the webhook and conformance', async () => {
+    assert.equal((await call('/metrics', { token: TOKEN })).status, 200)
+    assert.equal((await call('/v1/gate?release=v1', { token: TOKEN })).status, 200)
+    assert.equal(
+      (await call('/api/alerts/webhook', { method: 'POST', token: TOKEN, body: { alerts: [] } }))
+        .status,
+      200,
+    )
+    assert.equal(
+      (
+        await call('/v1/conformance', {
+          method: 'POST',
+          token: TOKEN,
+          body: { suite: 'wallet', identical: 57, breaking: 0 },
+        })
+      ).status,
+      201,
+    )
+  })
+
+  it('admits an admin bearer on an adminOnly route even when the static token is also sent', async () => {
+    // The static token must not COUNT on these routes; it must not POISON them either. A client
+    // that sets the header from an environment variable and also signs in is not an attacker.
+    const response = await call('/v1/slos/ledger.availability', {
+      method: 'PUT',
+      token: TOKEN,
+      bearer: 'admin-token',
+      body: { service: 'ledger', tier: 1, kind: 'availability', objectivePpm: '999500' },
+    })
+    assert.equal(response.status, 200)
+  })
+
+  it('attributes an adminOnly write to the identity, never to service:beacon-token', async () => {
+    await syncRegistry(db(sql), [fakeJourney('identity.register', async () => {})])
+    await call('/v1/journeys/identity.register/mute', {
+      method: 'POST',
+      token: TOKEN,
+      bearer: 'admin-token',
+      body: { muted: true, reason: 'a real person, named in the record' },
+    })
+    const rows = (await sql`select muted_by from journeys`) as unknown as { muted_by: string }[]
+    assert.equal(rows[0]?.muted_by, 'user:u1')
+  })
 })

@@ -27,6 +27,12 @@
  * every route that requires an identity token is a route nobody can reach — and the routes nobody
  * can reach are the ones that would say identity has broken. `deploy/prometheus/prometheus.yml:90`
  * already presents this header; the estate's own correction to AD-20 is that the scrape needs it.
+ *
+ * **THE SECOND DOOR DOES NOT OPEN THE ADMIN ROUTES.** The static token satisfies READ, GATE and
+ * WRITE and never `role:admin`, so the four `adminOnly` routes — gate overrides, probe upsert,
+ * journey mute and SLO writes — need an identity that names a person. `authorise` carries the
+ * full reasoning; the short version is that a shared secret able to mute a journey is a shared
+ * secret able to turn the release gate green.
  */
 
 import { timingSafeEqual } from 'node:crypto'
@@ -316,8 +322,14 @@ async function handle(route: Route | undefined, ctx: RequestContext, deps: Serve
       //
       // Identity being down is the single most likely reason somebody is reading a status page,
       // and if every route here needed an identity token then the page would be down too. That is
-      // what the static token is for, and it is checked BEFORE the JWT in `authorise` so this
-      // branch is only ever reached by a caller who presented no static token at all.
+      // what the static token is for, and it is checked BEFORE the JWT in `authorise`.
+      //
+      // Reachable from exactly two callers, and neither is a read. A caller who presented no
+      // static token at all; and a caller who presented one on an `adminOnly` route TOGETHER with
+      // a bearer, since the static token does not satisfy `role:admin` and the bearer must then
+      // be verified. Break-glass with no bearer never gets here — it is a 403 above. So identity
+      // being down still costs nobody a read, and costs an admin only the four routes that
+      // change the estate, which is the correct thing to lose.
       // ══════════════════════════════════════════════════════════════════════════════════════
       ctx.log.error('token verifier unavailable', { err })
       return errorReply(503, 'verifier_unavailable', 'authentication is temporarily unavailable', ctx.requestId)
@@ -866,6 +878,32 @@ interface AuthOptions {
  * **The order is the point.** The static token is checked before the verifier is consulted, so a
  * caller holding it is never affected by identity being unreachable — which is precisely the state
  * in which somebody is trying to read this service.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **BUT THE STATIC TOKEN IS NEVER AN ADMINISTRATOR, AND THE ORDER IS WHY THAT NEEDS SAYING.**
+ *
+ * Checking it first used to mean checking it INSTEAD: the match returned before the `adminOnly`
+ * branch below was reached, so `adminOnly` was decorative on all four routes that declare it —
+ * gate overrides, probe upsert, journey mute and SLO writes. `BEACON_TOKEN` is one long-lived
+ * value that sits in the estate compose file, in Prometheus's secrets directory and in CI, held
+ * by three processes that are not people. Muting a journey makes the release gate green, and
+ * writing an SLO moves the line the gate is measured against — so a shared secret that could do
+ * either was a shared secret that could approve its own release. A credential that can silence
+ * the thing watching you is the one to get right.
+ *
+ * The line is drawn at `adminOnly` rather than at read-only, and that is a decision rather than a
+ * compromise. Break-glass exists so the estate can be READ when identity is down, but its actual
+ * deployed holders also legitimately WRITE two non-admin routes: Alertmanager posts
+ * `/api/alerts/webhook` to open incidents (`alertmanager.yml:118`) and the conformance CLI posts
+ * `/v1/conformance` (`conformance/src/cli.ts:298`). Neither holds an identity credential, and
+ * cutting them to read-only would mean alerts that open no incident — losing the estate's
+ * incident record at the exact moment it is needed. Nothing that holds this token needs an
+ * `adminOnly` route. The one caller that used to, `beacon slo-seed --token`, already documents
+ * `--bearer` as preferred for precisely this reason (`cli.ts`, `parseSloSeedArgs`).
+ *
+ * So: the static token satisfies READ, GATE and WRITE, and never `role:admin`. Administrative
+ * change to beacon requires an identity that names a person.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
 async function authorise(
   ctx: RequestContext,
@@ -874,17 +912,29 @@ async function authorise(
   options: AuthOptions = {},
 ): Promise<Principal> {
   const presented = headerOf(ctx.req, 'x-beacon-token')
-  if (presented && constantTimeEquals(presented, deps.token)) {
-    // Timing-safe, because a byte-at-a-time comparison of a shared secret is a byte-at-a-time
-    // forgery oracle: an attacker who can measure it recovers the token one character at a time
-    // without ever knowing it.
+  // Timing-safe, because a byte-at-a-time comparison of a shared secret is a byte-at-a-time
+  // forgery oracle: an attacker who can measure it recovers the token one character at a time
+  // without ever knowing it.
+  const breakGlass =
+    presented !== undefined && presented !== '' && constantTimeEquals(presented, deps.token)
+  if (breakGlass && !options.adminOnly) {
     return { kind: 'service', service: 'beacon-token', scopes: [scope] }
   }
 
   const token = bearerFrom(headerOf(ctx.req, 'authorization'))
   // A missing token takes the same 401 path as a bad one rather than being a separate branch that
   // can drift away from it.
-  if (!token) throw new TokenError('no credential presented', 'missing')
+  if (!token) {
+    // ...except when the caller DID present valid break-glass and simply is not an admin. That is
+    // a 403, not a 401: the credential was recognised. An operator who gets a bare "a valid
+    // credential is required" while holding a valid credential retries with the same token
+    // instead of reaching for an identity, and debugs the wrong thing during an incident.
+    if (breakGlass) throw new ForbiddenError('role:admin')
+    throw new TokenError('no credential presented', 'missing')
+  }
+  // Falling through rather than refusing outright, so that break-glass does not POISON a request
+  // that also carries a real admin bearer. A client that sets this header from an environment
+  // variable and also signs in is not an attacker, and the bearer still has to pass `isAdmin`.
   const principal = await deps.verifier.principal(token)
 
   if (options.adminOnly) {
