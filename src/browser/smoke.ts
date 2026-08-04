@@ -181,7 +181,25 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
     subdomain: '',
     path: '/',
     session: 'does-not-have-to',
-    renders: [/One crypto world/i, /The loop is the product/i],
+    // ONE EDITORIAL STRING AND ONE STRUCTURAL ONE, deliberately — this pair was
+    // `[/One crypto world/i, /The loop is the product/i]` until 2026-08-04, and both were removed
+    // from the marketing site on the owner's instruction. The tier went 17/17 → 16/17 and was
+    // RIGHT: it is pinned to the site's own words precisely so that a gateway routing every
+    // hostname to one bundle is caught, and words are what distinguish one bundle from another.
+    //
+    // But pinning only a POSITIONING line means this fails every time marketing is legitimately
+    // rewritten, which is a check that cries wolf. Pinning only a STRUCTURAL one weakens what it
+    // was built for, because a nav label is the sort of thing that later moves into shared chrome
+    // and stops being unique. So: one of each.
+    //
+    // `Build status` was measured against the other bundles before being trusted — absent from
+    // hub's and market's JavaScript, present in site's. If it ever appears in shared chrome this
+    // pair needs revisiting, and that is a better failure than a silent one.
+    //
+    // The editorial half is guarded on the other side too: `site/test/content.test.ts` requires the
+    // spine to name EMBER and forbids the loop framing anywhere on the home page, so a rewrite
+    // that changes it has to pass that first.
+    renders: [/EMBER, and everything built on it/i, /Build status/i],
   },
   {
     key: 'hub',
