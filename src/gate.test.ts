@@ -205,6 +205,7 @@ describe('the determinacy classification is a single source of truth', () => {
     'journey_insufficient_history',
     'error_budget_no_data',
     'conformance_never_run',
+    'conformance_inconclusive',
     'beacon_unavailable',
   ]
   const knownCodes: ReasonCode[] = [
@@ -449,6 +450,86 @@ describe('the gate against a real estate', { skip }, () => {
       breaking: 0,
     })
     assert.equal((await evaluate(db(sql), RELEASE, OPTIONS)).decision, 'promote')
+  })
+
+  /**
+   * A suite that could not run is not a suite that passed.
+   *
+   * Until 2026-08-04 the conformance loop asked one question — `breaking > 0` — and a `skip`
+   * carries `breaking = 0`. So a skipped suite said nothing, AND its mere existence retired
+   * `conformance_never_run`, which was the only other conformance input. One honest "I could not
+   * look" turned an indeterminate gate determinate with zero comparisons made.
+   *
+   * Each test below fails against the code as it stood: the first two promoted, and the third
+   * promoted for the same reason the first did.
+   */
+  it('REFUSES a conformance suite whose most recent run was a skip — a skip is not evidence', async () => {
+    await threeGreen()
+    await recordConformanceRun(db(sql), {
+      suite: 'wallet',
+      status: 'skip',
+      identical: 0,
+      benign: 0,
+      breaking: 0,
+      skipped: 10,
+    })
+    const decision = await evaluate(db(sql), RELEASE, OPTIONS)
+    assert.equal(decision.decision, 'refuse')
+    // Indeterminate, not merely refused. Nobody found out whether the contract held, and that is
+    // a different sentence from "the contract is broken".
+    assert.equal(decision.indeterminate, true)
+    assert.ok(decision.reasons.some((reason) => reason.code === 'conformance_inconclusive'))
+  })
+
+  it('REFUSES a conformance suite whose most recent run errored', async () => {
+    await threeGreen()
+    await recordConformanceRun(db(sql), { suite: 'wallet', status: 'error' })
+    const decision = await evaluate(db(sql), RELEASE, OPTIONS)
+    assert.equal(decision.decision, 'refuse')
+    assert.equal(decision.indeterminate, true)
+    assert.ok(decision.reasons.some((reason) => reason.code === 'conformance_inconclusive'))
+  })
+
+  it('does not let one skipped suite vouch for a suite that never ran', async () => {
+    // The failure this whole change is about, stated as one case: the gate's only "has anything
+    // been compared" question is `conformance.length === 0`, so ANY row answers it. A row that
+    // compared nothing must not be the row that answers it.
+    await threeGreen()
+    await recordConformanceRun(db(sql), { suite: 'identity', status: 'skip', skipped: 15 })
+    const decision = await evaluate(db(sql), RELEASE, OPTIONS)
+    assert.notEqual(decision.decision, 'promote')
+    assert.equal(decision.indeterminate, true)
+  })
+
+  it('an inconclusive suite cannot be overridden, because nobody looked', async () => {
+    // The determinacy is what carries this, and it is worth asserting through `addOverride`
+    // rather than through `determinacyOf` alone: the refusal an operator meets at 3am is this one.
+    await assert.rejects(
+      () =>
+        addOverride(db(sql), {
+          releaseTag: RELEASE,
+          reasonCode: 'conformance_inconclusive',
+          reason: 'the suite could not run and we are shipping anyway',
+          requestedBy: 'user:1',
+          ttlMs: 3_600_000,
+        }),
+      OverrideError,
+    )
+  })
+
+  it('still counts a skipped suite as no evidence when another suite passed', async () => {
+    // Per-suite, not per-estate. A green `wallet` says nothing about `identity`, and the loop
+    // that reported one status for the whole set would let a broad corpus be certified by its
+    // narrowest scenario.
+    await threeGreen()
+    await recordConformanceRun(db(sql), { suite: 'wallet', status: 'pass', identical: 40 })
+    await recordConformanceRun(db(sql), { suite: 'identity', status: 'skip', skipped: 15 })
+    const decision = await evaluate(db(sql), RELEASE, OPTIONS)
+    assert.equal(decision.decision, 'refuse')
+    assert.equal(decision.indeterminate, true)
+    const inconclusive = decision.reasons.filter((r) => r.code === 'conformance_inconclusive')
+    assert.equal(inconclusive.length, 1)
+    assert.equal(inconclusive[0]?.subject, 'identity')
   })
 
   it('refuses on an open sev2 incident', async () => {

@@ -63,6 +63,7 @@ export type ReasonCode =
   | 'journey_insufficient_history'
   | 'error_budget_no_data'
   | 'conformance_never_run'
+  | 'conformance_inconclusive'
   | 'beacon_unavailable'
 
 /**
@@ -88,6 +89,7 @@ const UNKNOWN_CODES: ReadonlySet<ReasonCode> = new Set<ReasonCode>([
   'journey_insufficient_history',
   'error_budget_no_data',
   'conformance_never_run',
+  'conformance_inconclusive',
   'beacon_unavailable',
 ])
 
@@ -304,7 +306,45 @@ export async function collectReasons(sql: Sql, inputs: GateInputs): Promise<read
     reasons.push(reason('conformance_never_run', 'conformance', 'no conformance run has been recorded'))
   }
   for (const run of conformance) {
-    if (run.breaking > 0) {
+    // ────────────────────────────────────────────────────────────────────────────────────────
+    // A SUITE THAT DID NOT RUN IS NOT A SUITE THAT PASSED, AND UNTIL 2026-08-04 THIS LOOP
+    // TREATED THE TWO THE SAME.
+    //
+    // The only thing asked of a recorded run was `breaking > 0`. `conformance.ts` is explicit
+    // that "a suite that could not be run reports `skip` with the reason — never `pass`", and
+    // the database enforces the other half with `conformance_runs_pass_ran_something`. But a
+    // `skip` row carries `breaking = 0`, so it fell through this loop saying nothing at all —
+    // and because the ONLY other conformance input is `conformance.length === 0`, one skipped
+    // suite was enough to retire `conformance_never_run` and leave the gate with no
+    // characterisation evidence and no reason code to say so.
+    //
+    // That is the exact shape of failure this repository exists to prevent, arrived at from the
+    // other side: not a green row without a run, but a run whose honest "I could not look"
+    // silenced the only code that was watching. The estate can produce it today — six of the
+    // corpus's eight scenarios skip because the services they characterise are not deployed —
+    // so this was one `POST /v1/conformance` away from turning an indeterminate gate
+    // determinate without a single comparison having been made.
+    //
+    // `skip` and `error` are therefore UNKNOWN: nobody found out. They cannot be overridden,
+    // which is right — "ship it anyway, the suite could not run" is not a decision anyone can
+    // be accountable for, and `addOverride` refuses it at the point of creation.
+    // ────────────────────────────────────────────────────────────────────────────────────────
+    if (run.status === 'skip' || run.status === 'error') {
+      reasons.push(
+        reason(
+          'conformance_inconclusive',
+          run.suite,
+          `the most recent run was a ${run.status}, so nothing was compared ` +
+            `(${run.identical} identical, ${run.benign} benign, ${run.skipped} skipped)`,
+        ),
+      )
+      continue
+    }
+    // `status` and `breaking` are derived together by `statusFor`, so a `fail` carries a
+    // breaking count and a breaking count carries a `fail`. Both are read anyway: the pair can
+    // only disagree by a write that bypassed `recordConformanceRun`, and the failure mode of
+    // reading just one of them is that such a row reports clean.
+    if (run.status === 'fail' || run.breaking > 0) {
       reasons.push(
         reason(
           'conformance_breaking',
