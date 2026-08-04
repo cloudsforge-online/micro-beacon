@@ -102,6 +102,10 @@ export function fakeJourney(
     critical: true,
     run: body,
     ...overrides,
+    // After the spread and not before it. `overrides` is a `Partial`, so under
+    // `exactOptionalPropertyTypes` an absent key spreads as `string | undefined` and would widen a
+    // required field. Reading it explicitly keeps the override working and the type honest.
+    service: overrides.service ?? 'test-service',
   }
 }
 
@@ -171,6 +175,15 @@ export interface FakeRequest {
 export interface FakeReply {
   readonly status: number
   readonly body?: unknown
+  /**
+   * Response headers, for the assertions that are about one.
+   *
+   * Added for `retry-after`: identity's limiter sends it with every 429, and a journey that waits
+   * out a rate limit reads it to decide how long. A fake that could not send one could only
+   * exercise the fallback path, so the branch that actually runs in production — "wait exactly as
+   * long as the service asked" — would be the untested one.
+   */
+  readonly headers?: Readonly<Record<string, string>>
 }
 
 export type FakeHandler = (req: FakeRequest) => FakeReply
@@ -183,6 +196,15 @@ export interface FakeEstate {
   readonly requests: readonly FakeRequest[]
   /** Install or replace one route. `'POST /auth/login'`. */
   route(key: string, handler: FakeHandler): void
+  /**
+   * The handler currently installed for a route, so a test can wrap it rather than restate it.
+   *
+   * The alternative is copying `healthyEstate`'s registration logic into a test that wants to fail
+   * only the FIRST attempt — and a copy of the fake's behaviour inside a test is a second place for
+   * the fake to be wrong, which defeats the point of having a fake that answers what the real
+   * service answers.
+   */
+  handlerFor(key: string): FakeHandler | undefined
   close(): Promise<void>
 }
 
@@ -246,6 +268,7 @@ export async function fakeEstate(names: readonly string[] = []): Promise<FakeEst
       res.writeHead(reply.status, {
         'content-type': 'application/json; charset=utf-8',
         'content-length': Buffer.byteLength(payload),
+        ...reply.headers,
       })
       res.end(payload)
     })
@@ -269,6 +292,7 @@ export async function fakeEstate(names: readonly string[] = []): Promise<FakeEst
     route(key, handler) {
       handlers.set(key, handler)
     },
+    handlerFor: (key) => handlers.get(key),
     close: () =>
       new Promise<void>((resolve) => {
         for (const socket of open) socket.destroy()

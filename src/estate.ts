@@ -77,7 +77,7 @@
  * line number was standing in for, done in a way that cannot rot.
  */
 
-import { accessToken, call, stringField, throwaway } from './calls.ts'
+import { accessToken, call, registerAccount, stringField, throwaway } from './calls.ts'
 import { GROUPS } from './groups.ts'
 import { ecosystemJourneys } from './ecosystem.ts'
 import type { JourneyContext, JourneyDefinition } from './journeys.ts'
@@ -95,22 +95,20 @@ export const IDENTITY_REGISTER: JourneyDefinition = {
   name: 'identity.register',
   title: 'A new account can be created and recognised',
   productGroup: GROUPS.account,
+  // Only identity is dialled. Its budget, unambiguously.
+  service: 'identity',
   critical: true,
   async run(ctx) {
     const identity = ctx.target('identity')
     const account = throwaway()
 
     const token = await ctx.step('register', async () => {
-      const result = await call(ctx, `${identity}/auth/register`, {
-        method: 'POST',
-        body: { email: account.email, handle: account.handle, password: account.password },
-      })
-      if (result.status === 429) {
-        // The estate protecting itself is not the estate being broken. Identity rate-limits
-        // registration, and recording a limit hit as a failure would open an incident against a
-        // control that is working.
-        ctx.skip('registration is rate limited')
-      }
+      // The estate protecting itself is not the estate being broken. Identity rate-limits
+      // registration, and recording a limit hit as a failure would open an incident against a
+      // control that is working. `registerAccount` waits out identity's own `retry-after` once
+      // before it skips — read the block above it in `calls.ts`: this journey skipped on every
+      // cycle for ten cycles because Beacon's OWN non-critical journeys spent the allowance first.
+      const result = await registerAccount(ctx, identity, account)
       ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
       const token = accessToken(result.body)
       ctx.assert(token !== null, 'registration returned no access token')
@@ -136,17 +134,14 @@ export const IDENTITY_SIGNIN: JourneyDefinition = {
   name: 'identity.signin',
   title: 'An existing account can sign in',
   productGroup: GROUPS.account,
+  service: 'identity',
   critical: true,
   async run(ctx) {
     const identity = ctx.target('identity')
     const account = throwaway()
 
     await ctx.step('register the account this run will sign into', async () => {
-      const result = await call(ctx, `${identity}/auth/register`, {
-        method: 'POST',
-        body: { email: account.email, handle: account.handle, password: account.password },
-      })
-      if (result.status === 429) ctx.skip('registration is rate limited')
+      const result = await registerAccount(ctx, identity, account)
       ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
     })
 
@@ -191,6 +186,9 @@ export const IDENTITY_HANDOFF: JourneyDefinition = {
   name: 'identity.handoff',
   title: 'One account signs into everything, once',
   productGroup: GROUPS.account,
+  // Both halves of the hand-off are identity's routes; the "everything" in the title is the
+  // surfaces an operator would reach for, and not a service this journey touches.
+  service: 'identity',
   critical: true,
   async run(ctx) {
     const identity = ctx.target('identity')
@@ -224,11 +222,7 @@ export const IDENTITY_HANDOFF: JourneyDefinition = {
     }
 
     const token = await ctx.step('register', async () => {
-      const result = await call(ctx, `${identity}/auth/register`, {
-        method: 'POST',
-        body: { email: account.email, handle: account.handle, password: account.password },
-      })
-      if (result.status === 429) ctx.skip('registration is rate limited')
+      const result = await registerAccount(ctx, identity, account)
       ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
       const registered = accessToken(result.body)
       ctx.assert(registered !== null, 'registration returned no access token')
@@ -303,6 +297,7 @@ export const MARKET_CATALOGUE: JourneyDefinition = {
   name: 'market.catalogue',
   title: 'The market catalogue can be read',
   productGroup: GROUPS.market,
+  service: 'market',
   critical: false,
   async run(ctx) {
     const market = ctx.target('market')
@@ -322,6 +317,7 @@ export const WORLDS_REGISTRY: JourneyDefinition = {
   name: 'worlds.registry',
   title: 'The title registry answers, so a launcher can list games',
   productGroup: GROUPS.worlds,
+  service: 'worlds',
   critical: false,
   async run(ctx) {
     const worlds = ctx.target('worlds')
@@ -345,6 +341,12 @@ export const ESTATE_REACHABLE: JourneyDefinition = {
   name: 'estate.reachable',
   title: 'Every service the estate is configured to have is answering',
   productGroup: GROUPS.network,
+  // `beacon`, and it is the one entry that is not the service being dialled. This journey asserts
+  // that EVERY address in `BEACON_TARGETS` answers, so no single target owns its failures — but
+  // something must, or the budget is unowned. Beacon owns it because Beacon owns the target list:
+  // when this journey goes red the first question is whether the estate lost a service or whether
+  // Beacon is pointed at one that no longer exists, and that question is Beacon's to answer.
+  service: 'beacon',
   critical: true,
   async run(ctx) {
     // Ordered so a failure names the same service every time. An unordered scan reports whichever

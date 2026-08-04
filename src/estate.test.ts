@@ -31,8 +31,21 @@ import {
   MARKET_CATALOGUE,
   WORLDS_REGISTRY,
 } from './estate.ts'
+import { MAX_REGISTER_WAIT_MS, registerRetryMs } from './calls.ts'
 import { runJourney, type JourneyDefinition, type JourneyRun } from './journeys.ts'
-import { fakeEstate, type FakeEstate } from './testsupport.ts'
+import { fakeEstate, type FakeEstate, type FakeHandler } from './testsupport.ts'
+
+/**
+ * The healthy registration handler, so a test can refuse the first attempt and then delegate.
+ *
+ * Throws rather than returning undefined: a test that silently got no handler would install a
+ * wrapper around nothing and assert against a 404, which reads as the journey being broken.
+ */
+function registerHandlerOf(estate: FakeEstate): FakeHandler {
+  const handler = estate.handlerFor('POST /auth/register')
+  if (!handler) throw new Error('the fake estate has no POST /auth/register handler')
+  return handler
+}
 
 const SERVICES = ['identity', 'market', 'worlds', 'ledger', 'hub-api', 'activity']
 
@@ -183,12 +196,111 @@ test('identity.register goes red when /auth/me stops requiring a token', async (
 
 test('identity.register treats a rate limit as a skip, never as a failure', async () => {
   await withEstate(async (estate) => {
-    estate.route('POST /auth/register', () => ({ status: 429, body: { error: { code: 'too_many_requests' } } }))
+    // `retry-after: 1` rather than a bare 429, so this asserts the skip without also asserting a
+    // five-second wait. That the wait happens at all is the next test's job.
+    estate.route('POST /auth/register', () => ({
+      status: 429,
+      headers: { 'retry-after': '1' },
+      body: { error: { code: 'too_many_requests' } },
+    }))
     const result = await run(IDENTITY_REGISTER, estate)
     // The estate protecting itself is not the estate being broken, and a skip is not green
     // either — the gate refuses on it.
     assert.equal(result.status, 'skip')
   })
+})
+
+/* ------------------------------------------------- the registration ceiling, and waiting it out */
+
+/**
+ * These five are the regression suite for the defect described at the top of `calls.ts`.
+ *
+ * On the live estate `identity.register` and `identity.signin` — both CRITICAL — skipped
+ * `registration is rate limited` on ten consecutive cycles, opening a SEV2 against each and
+ * refusing every release. Nothing was wrong with identity: one Beacon scheduler cycle makes seven
+ * registrations against a ceiling of five per minute per address, and `listRegistered` order is
+ * alphabetical, so `ecosystem.*` spent the whole allowance before `identity.*` was reached.
+ *
+ * The first two fail against the code as it stood, which skipped on the first 429 without ever
+ * asking identity when to come back.
+ */
+test('identity.register RETRIES ONCE after a 429, honouring identity’s own retry-after', async () => {
+  await withEstate(async (estate) => {
+    const healthy = estate.requests.length
+    let attempts = 0
+    const original = registerHandlerOf(estate)
+    estate.route('POST /auth/register', (req) => {
+      attempts += 1
+      // Exactly the first attempt is refused, which is the live shape: the window rolls over and
+      // the second lands. `retry-after: 1` keeps the test at a second rather than at identity's
+      // real ~48.
+      if (attempts === 1) {
+        return { status: 429, headers: { 'retry-after': '1' }, body: { error: { code: 'rate_limited' } } }
+      }
+      return original(req)
+    })
+    const result = await run(IDENTITY_REGISTER, estate)
+    assert.equal(result.status, 'pass', String(result.error))
+    assert.equal(attempts, 2, 'the journey must come back exactly once, not give up and not loop')
+    assert.ok(estate.requests.length > healthy)
+  })
+})
+
+test('identity.signin recovers from a rate-limited registration too', async () => {
+  await withEstate(async (estate) => {
+    let attempts = 0
+    const original = registerHandlerOf(estate)
+    estate.route('POST /auth/register', (req) => {
+      attempts += 1
+      if (attempts === 1) {
+        return { status: 429, headers: { 'retry-after': '1' }, body: { error: { code: 'rate_limited' } } }
+      }
+      return original(req)
+    })
+    const result = await run(IDENTITY_SIGNIN, estate)
+    assert.equal(result.status, 'pass', String(result.error))
+  })
+})
+
+test('a second 429 is a SKIP and never a retry loop', async () => {
+  await withEstate(async (estate) => {
+    let attempts = 0
+    estate.route('POST /auth/register', () => {
+      attempts += 1
+      return { status: 429, headers: { 'retry-after': '1' }, body: { error: { code: 'rate_limited' } } }
+    })
+    const result = await run(IDENTITY_REGISTER, estate)
+    assert.equal(result.status, 'skip')
+    // Two, not three and not "until the deadline". A journey that ground away at a limiter until
+    // its 90s deadline would report `error` — Beacon broken — for an estate that is fine.
+    assert.equal(attempts, 2)
+    assert.match(String(result.error), /seven registrations against a ceiling of five/)
+  })
+})
+
+test('a retry-after longer than the bound is a skip rather than a wait', async () => {
+  await withEstate(async (estate) => {
+    let attempts = 0
+    estate.route('POST /auth/register', () => {
+      attempts += 1
+      // 600s. A service asking for ten minutes is one a 90s journey must give up against, or the
+      // wait outlives the deadline and an honest skip becomes a misleading error.
+      return { status: 429, headers: { 'retry-after': '600' }, body: { error: { code: 'rate_limited' } } }
+    })
+    const result = await run(IDENTITY_REGISTER, estate)
+    assert.equal(result.status, 'skip')
+    assert.equal(attempts, 1, 'nothing should be retried when the wait would exceed the bound')
+  })
+})
+
+test('the wait is bounded whatever the header says', () => {
+  // Pure, so the clamp is provable without waiting for anything.
+  assert.equal(registerRetryMs('1'), 1_000)
+  assert.equal(registerRetryMs('60'), MAX_REGISTER_WAIT_MS)
+  assert.equal(registerRetryMs('61'), 0, 'over the bound is a skip, not a clamped wait')
+  assert.equal(registerRetryMs(null), 5_000, 'a missing header is the ordinary case, not an error')
+  assert.equal(registerRetryMs('not-a-number'), 5_000)
+  assert.equal(registerRetryMs('-1'), 5_000)
 })
 
 /* ------------------------------------------------------------------ identity.signin */
