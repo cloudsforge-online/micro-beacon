@@ -506,6 +506,7 @@ export interface SinkMark {
   readonly pageErrors: number
   readonly failedRequests: number
   readonly observabilityFailures: number
+  readonly requests: number
 }
 
 export function mark(collected: Collected): SinkMark {
@@ -514,6 +515,7 @@ export function mark(collected: Collected): SinkMark {
     pageErrors: collected.pageErrors.length,
     failedRequests: collected.failedRequests.length,
     observabilityFailures: collected.observabilityFailures.length,
+    requests: collected.requests.length,
   }
 }
 
@@ -532,6 +534,7 @@ export function since(collected: Collected, at: SinkMark): Collected {
     pageErrors: collected.pageErrors.slice(at.pageErrors),
     failedRequests: collected.failedRequests.slice(at.failedRequests),
     observabilityFailures: collected.observabilityFailures.slice(at.observabilityFailures),
+    requests: collected.requests.slice(at.requests),
   }
 }
 

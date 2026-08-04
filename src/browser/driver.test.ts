@@ -49,6 +49,7 @@ const NOTHING: Collected = {
   pageErrors: [],
   failedRequests: [],
   observabilityFailures: [],
+  requests: [],
 }
 
 /* ------------------------------------------------------------------ the pure half */

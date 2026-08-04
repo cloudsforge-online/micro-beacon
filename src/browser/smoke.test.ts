@@ -140,6 +140,7 @@ test('THE WORLDS REGISTRY DEFECT IS RED: the frontend calls a host the gateway d
         },
       ],
       observabilityFailures: [],
+    requests: [],
     },
   })
   const checks = checkSurface(observation, surface('worlds'), HANDLE).map((f) => f.check)
@@ -159,6 +160,7 @@ test('THE FORESIGHT DEFECT IS RED: a page that renders nothing at all', () => {
       pageErrors: ["Cannot read properties of undefined (reading 'markets')"],
       failedRequests: [],
       observabilityFailures: [],
+    requests: [],
     },
   })
   const checks = checkSurface(observation, surface('foresight'), HANDLE).map((f) => f.check)
@@ -200,6 +202,7 @@ test('THE TESSERA DEFECT IS RED: a 401 the page turned into an error state', () 
         { url: 'https://tessera.cloudsforge.localtest.me/v1/wards', method: 'GET', failure: 'HTTP 401' },
       ],
       observabilityFailures: [],
+    requests: [],
     },
   })
   const checks = checkSurface(observation, surface('tessera'), HANDLE).map((f) => f.check)
@@ -255,6 +258,7 @@ test('every finding for a page is reported, never just the first', () => {
       pageErrors: ['boom'],
       failedRequests: [],
       observabilityFailures: [],
+    requests: [],
     },
   })
   const checks = new Set(checkSurface(observation, surface('foresight'), HANDLE).map((f) => f.check))
@@ -287,6 +291,7 @@ test('the browser telemetry sink is partitioned, so a broken reporter is not a b
       observabilityFailures: [
         { url: 'https://lantern.cloudsforge.localtest.me/ingest/client', method: 'POST', failure: 'net::ERR_FAILED' },
       ],
+      requests: [],
     },
   })
   assert.deepEqual(checkSurface(observation, surface('market'), HANDLE), [])

@@ -53,6 +53,16 @@ export interface BrowserResponse {
 export interface BrowserPage {
   goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<BrowserResponse | null>
   evaluate<T>(fn: () => T): Promise<T>
+  /**
+   * The one-argument form, declared because a money journey cannot inline what it is asserting.
+   *
+   * `evaluate(() => …)` closes over nothing — playwright serialises the function source and runs it
+   * in the page, so a variable from this process is not in scope there. A journey that has to ask
+   * the page "is the destination you are showing equal to THIS string" needs to hand the string
+   * across, and the alternative — building the function body by string concatenation — is how a
+   * selector becomes an injection.
+   */
+  evaluate<T, A>(fn: (arg: A) => T, arg: A): Promise<T>
   waitForLoadState(state: string, options?: { timeout?: number }): Promise<void>
   title(): Promise<string>
   setDefaultTimeout(ms: number): void
@@ -190,6 +200,44 @@ export interface FailedRequest {
   readonly failure: string
 }
 
+/**
+ * One request the page made, as the browser reported it going out.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THIS IS OBSERVATION. IT IS NOT INTERCEPTION, AND THE DIFFERENCE IS THE WHOLE OF THIS TIER.**
+ *
+ * `smoke.ts`'s header states the one property this directory must never lose: there is no
+ * `page.route`, no `route.fulfill`, no `setOfflineMode` and no fixture anywhere in it, because a
+ * suite that answers its own requests cannot see that the API is down. Reading what went out
+ * changes nothing about where it goes or what comes back — the estate answers every one of these
+ * exactly as it would with nobody watching, and `smoke.test.ts` still asserts the absence of the
+ * interception calls over these sources.
+ *
+ * It exists because doc 22 §3.1 makes `client-request` one of the three things a browser scenario
+ * is allowed to assert — "what the client SENT, captured from the browser's own network log" — and
+ * without a log there is no way to make one. Every `client-request` assertion in `moneyjourneys.ts`
+ * reads this array: that the destination in the withdrawal body is byte-identical to the one on the
+ * confirmation step, that a double-click sends ONE request under ONE idempotency key, that the
+ * activity cursor goes back unparsed, that the public rules page sends no credential.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export interface RequestRecord {
+  readonly method: string
+  readonly url: string
+  /**
+   * Lower-cased header names, as Chromium reports them.
+   *
+   * Whole rather than filtered: a scenario asserting that a public page sends NO credential has to
+   * be able to see that `authorization` is absent, and a filter written to keep secrets out of the
+   * log is a filter that would have hidden the field under test. Nothing prints this array — the
+   * assertions read it and put their own sentence in the failure — and a bearer token in this
+   * estate lives for 600 seconds.
+   */
+  readonly headers: Readonly<Record<string, string>>
+  /** The request body, when it had one. `null` for a GET, and for a body Chromium did not keep. */
+  readonly postData: string | null
+}
+
 export interface Collected {
   readonly consoleErrors: readonly string[]
   readonly pageErrors: readonly string[]
@@ -200,6 +248,8 @@ export interface Collected {
    * See `isObservabilitySink`. Reported by `assertClean`, never fatal on their own.
    */
   readonly observabilityFailures: readonly FailedRequest[]
+  /** Every request the page made, in order. See `RequestRecord`. Never asserted on by default. */
+  readonly requests: readonly RequestRecord[]
 }
 
 interface Sink {
@@ -207,11 +257,41 @@ interface Sink {
   pageErrors: string[]
   failedRequests: FailedRequest[]
   observabilityFailures: FailedRequest[]
+  requests: RequestRecord[]
 }
 
-/** A fresh collector. One place, so a caller cannot forget the fourth array. */
+/** A fresh collector. One place, so a caller cannot forget the fifth array. */
 export function newSink(): Sink {
-  return { consoleErrors: [], pageErrors: [], failedRequests: [], observabilityFailures: [] }
+  return {
+    consoleErrors: [],
+    pageErrors: [],
+    failedRequests: [],
+    observabilityFailures: [],
+    requests: [],
+  }
+}
+
+/**
+ * The requests a scenario is asking about, by method and exact pathname.
+ *
+ * Exact on the path rather than a prefix, for `ExpectedFailure`'s reason: a route is a fact, and a
+ * prefix match is how "exactly one withdrawal left the browser" quietly becomes "exactly one thing
+ * under /v1 left the browser". Static assets are not excluded here either — a scenario that wants
+ * them excluded says which path it means.
+ */
+export function requestsTo(
+  requests: readonly RequestRecord[],
+  method: string,
+  pathname: string,
+): readonly RequestRecord[] {
+  return requests.filter((r) => {
+    if (r.method.toUpperCase() !== method.toUpperCase()) return false
+    try {
+      return new URL(r.url).pathname === pathname
+    } catch {
+      return false
+    }
+  })
 }
 
 /**
@@ -573,6 +653,39 @@ export function attach(page: Pick<BrowserPage, 'on'>, sink: Sink): void {
 
   page.on('pageerror', ((err: { message?: string }) => {
     sink.pageErrors.push(String(err?.message ?? err).slice(0, 500))
+  }) as (arg: never) => void)
+
+  // The fifth listener, and the one that makes `client-request` assertable. It READS and returns;
+  // it does not abort, continue, fulfil or modify, so the request goes to the estate untouched.
+  // See `RequestRecord` for why observation and interception are not the same thing.
+  page.on('request', ((req: {
+    method(): string
+    url(): string
+    headers(): Record<string, string>
+    postData(): string | null
+  }) => {
+    let headers: Record<string, string> = {}
+    try {
+      headers = req.headers()
+    } catch {
+      // Chromium can report a request whose headers are no longer available. An empty record is
+      // the honest answer; guessing would make an "absent credential" assertion pass on a page
+      // that sent one.
+    }
+    let postData: string | null = null
+    try {
+      postData = req.postData()
+    } catch {
+      postData = null
+    }
+    sink.requests.push({
+      method: req.method(),
+      url: req.url().slice(0, 500),
+      headers,
+      // 20KB: enough for every body this estate posts, and bounded so a file upload cannot make a
+      // journey's memory a function of what somebody dragged onto a page.
+      postData: postData === null ? null : postData.slice(0, 20_000),
+    })
   }) as (arg: never) => void)
 
   page.on('requestfailed', ((req: {
