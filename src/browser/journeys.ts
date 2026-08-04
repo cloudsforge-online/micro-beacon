@@ -165,6 +165,12 @@ export function surfaceJourney(options: SurfaceJourneyOptions): JourneyDefinitio
     name: options.name,
     title: options.title,
     productGroup: options.productGroup,
+    // The surface key, which for a browser journey IS the owning service: what this asserts is
+    // that one bundle mounted and stayed clean, so a red belongs to whatever serves that bundle
+    // and not to the APIs it happened to call. These journeys are driven by `beacon browser` and
+    // are not in the scheduled registry, so none of them currently carries an SLO — the field is
+    // set correctly anyway rather than left to be guessed at the moment one does.
+    service: options.surface,
     critical: options.critical ?? false,
     // Generous, and its own rather than the global 90s: launching Chromium, loading a bundle and
     // waiting for a SPA to mount is not comparable to a JSON round trip, and sharing one deadline

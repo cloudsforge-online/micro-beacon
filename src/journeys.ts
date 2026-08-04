@@ -89,6 +89,30 @@ export interface JourneyDefinition {
   /** The public product group. Never a service name — see `publicstatus.ts`. */
   readonly productGroup: string
   /**
+   * The service that owns this journey's error budget. **Internal, and never published.**
+   *
+   * ────────────────────────────────────────────────────────────────────────────────────────────
+   * Added 2026-08-04, when the owner set the journey objectives and the seeder needed a `service`
+   * for each `slos` row. It is declared here rather than derived for two reasons, and the second
+   * is the one that matters.
+   *
+   *   1. **The fact did not exist anywhere.** The `journeys` TABLE records `product_group` and
+   *      nothing else that identifies a service, and `ProductGroup` is deliberately a public
+   *      customer-facing name — `groups.ts` says "never a service name" and `publicstatus.ts`
+   *      exists because a predecessor leaked `pay.rates` onto a pre-auth page. So the group
+   *      cannot stand in for this, in either direction.
+   *   2. **The name prefix is not the service.** Slicing `name` at the dot yields `ecosystem`,
+   *      `estate` and `identity` — and only the third is a service this estate runs. An error
+   *      budget attributed to a service called `ecosystem` is a budget nobody owns, which is the
+   *      same defect as no budget at all, arrived at with more ceremony.
+   *
+   * For a journey that spans services this is the service the failure would be attributed to —
+   * the one that must produce the joined-up answer — not every service it touches. Each is
+   * justified where it is set.
+   * ────────────────────────────────────────────────────────────────────────────────────────────
+   */
+  readonly service: string
+  /**
    * One of the critical-path set: register, sign in, SSO handoff, deposit, convert, spend,
    * withdraw, mint deploy, market purchase (13-operational-model.md:435). A critical journey that
    * is not green refuses a release on its own.

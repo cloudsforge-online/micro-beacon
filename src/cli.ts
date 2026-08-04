@@ -39,8 +39,25 @@ import type { GateDecision } from './gate.ts'
 const USAGE = `beacon <command>
 
   gate      ask the release gate, as an exit code
+  slo-seed  register the owner's journey objectives through the API
   browser   drive the declared tier-3 browser journeys against a running estate
   smoke     drive EVERY surface of a running estate in a real browser, stubbing nothing
+
+beacon slo-seed --url <base> [--bearer <jwt> | --token <token>] [--dry-run]
+
+  Registers one SLO per scheduled journey from the table in src/sloseed.ts, which is the
+  owner's decision transcribed. Idempotent — PUT /v1/slos/:name is an upsert — so it is
+  meant to run on every deploy. Refuses outright if any journey has no objective, rather
+  than seeding the ones it recognises.
+
+  --bearer    an identity access token for an admin. Preferred: PUT /v1/slos/:name is
+              adminOnly, and the static token short-circuits that check before it is
+              reached, so only a bearer exercises the route's own authorisation.
+  --token     the x-beacon-token credential. Defaults to BEACON_TOKEN.
+  --dry-run   print the plan and dial nothing. Needs no estate and no credential.
+
+exit codes: 0 every objective registered · 1 one or more refused · 2 bad arguments, or a
+journey with no objective
 
 beacon gate --release <tag> [--url <base>] [--token <token>] [--json] [--record]
 
@@ -584,6 +601,114 @@ export async function runSmokeCommand(args: SmokeArgs): Promise<0 | 1 | 2> {
   return result.findings.length === 0 ? 0 : 1
 }
 
+/* ------------------------------------------------------------------ beacon slo-seed */
+
+export interface SloSeedArgs {
+  readonly url: string
+  readonly headers: Readonly<Record<string, string>>
+  readonly dryRun: boolean
+}
+
+/**
+ * `--token` is the static `x-beacon-token`; `--bearer` is an identity access token.
+ *
+ * Both are accepted and the bearer is preferred when both are given, because `PUT /v1/slos/:name`
+ * is declared `adminOnly` and the two credentials satisfy that declaration differently: a bearer
+ * is checked against `isAdmin`, and the static token short-circuits `authorise` before the
+ * `adminOnly` branch is reached at all (`server.ts`, `authorise`). Seeding with a real admin
+ * identity is therefore the only way this command exercises the check the route claims to make —
+ * which is the point of going through the front door rather than issuing an INSERT.
+ */
+export function parseSloSeedArgs(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): SloSeedArgs | null {
+  let url = ''
+  let token = ''
+  let bearer = ''
+  let dryRun = false
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '--dry-run') dryRun = true
+    else if (arg === '--url') url = args[++i] ?? ''
+    else if (arg === '--token') token = args[++i] ?? ''
+    else if (arg === '--bearer') bearer = args[++i] ?? ''
+    else if (arg?.startsWith('--url=')) url = arg.slice('--url='.length)
+    else if (arg?.startsWith('--token=')) token = arg.slice('--token='.length)
+    else if (arg?.startsWith('--bearer=')) bearer = arg.slice('--bearer='.length)
+    else return null
+  }
+
+  if (!token) token = env['BEACON_TOKEN'] ?? ''
+  if (dryRun) return { url: url || 'http://unused.invalid', headers: {}, dryRun: true }
+  if (!url) return null
+  if (!bearer && !token) return null
+
+  return {
+    url,
+    headers: bearer ? { authorization: `Bearer ${bearer}` } : { 'x-beacon-token': token },
+    dryRun: false,
+  }
+}
+
+/**
+ * Register the owner's journey objectives.
+ *
+ * Exists so that the eleven rows are a command in a repository rather than eleven `curl`s in
+ * somebody's shell history — which is how `slos` came to be empty in the first place. It is
+ * idempotent (`upsertSlo` is an upsert), so the intended use is to run it on every deploy.
+ *
+ * `--dry-run` prints the plan and dials nothing, so the numbers can be reviewed against the
+ * owner's decision without a running estate or a credential.
+ */
+async function runSloSeed(rest: readonly string[], env: NodeJS.ProcessEnv): Promise<0 | 1 | 2> {
+  const args = parseSloSeedArgs(rest, env)
+  if (!args) {
+    stderr.write(USAGE)
+    return 2
+  }
+
+  const { catalogue, plan, registeredNames, seed, SloSeedError } = await import('./sloseed.ts')
+
+  let planned
+  try {
+    // The registry over the wire, the owning services from code. `plan`'s header says why the
+    // first of those is not an import: `ecosystemJourneys()` reads `process.env` at import time,
+    // so importing the registry here would seed a different table from inside the container than
+    // from a shell — and `--dry-run` would show numbers that are not the ones that get written.
+    const registered = args.dryRun
+      ? Object.keys((await import('./sloseed.ts')).OBJECTIVES)
+      : await registeredNames(args.url, args.headers)
+    planned = plan(await catalogue(), registered)
+  } catch (err) {
+    // A journey with no objective is not something to seed around. See `MISSING_IS_AN_ERROR`.
+    stderr.write(`${err instanceof SloSeedError ? err.message : String(err)}\n`)
+    return 2
+  }
+
+  for (const slo of planned) {
+    const pct = (Number(slo.objectivePpm) / 10_000).toFixed(2)
+    stdout.write(
+      `  ${slo.name.padEnd(32)} ${slo.service.padEnd(10)} tier ${slo.tier}  ` +
+        `${pct}%  ${slo.windowDays}d\n`,
+    )
+  }
+
+  if (args.dryRun) {
+    stdout.write(`\n${planned.length} objectives planned — nothing was written\n`)
+    return 0
+  }
+
+  const results = await seed(planned, { baseUrl: args.url, headers: args.headers })
+  const failed = results.filter((result) => !result.ok)
+  stdout.write(`\n${results.length - failed.length}/${results.length} registered\n`)
+  for (const result of failed) {
+    stderr.write(`  FAILED ${result.name} — HTTP ${result.status} ${result.error ?? ''}\n`)
+  }
+  return failed.length === 0 ? 0 : 1
+}
+
 export async function main(argsIn: readonly string[]): Promise<0 | 1 | 2> {
   const [command, ...rest] = argsIn
 
@@ -609,6 +734,10 @@ export async function main(argsIn: readonly string[]): Promise<0 | 1 | 2> {
       return 2
     }
     return runBrowser(browserArgs)
+  }
+
+  if (command === 'slo-seed') {
+    return runSloSeed(rest, process.env)
   }
 
   if (command !== 'gate') {

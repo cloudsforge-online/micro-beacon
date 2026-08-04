@@ -63,8 +63,10 @@ import {
   recordRun,
   runJourney,
   type JourneyDefinition,
+  type JourneyStatus,
 } from './journeys.ts'
 import { recordObservation } from './slo.ts'
+import { journeySloName } from './sloseed.ts'
 
 export const PROBE_KIND = 'probe.run'
 export const JOURNEY_KIND = 'journey.run'
@@ -156,9 +158,50 @@ export function availabilitySloName(target: string): string {
   return `${target}.availability`
 }
 
-/** Journey SLO name. `99% of scheduled runs pass`, and a skip counts against it. */
-export function journeySloName(journey: string): string {
-  return `${journey}.runs`
+/**
+ * Journey SLO name. `99% of scheduled runs pass`, and a skip counts against it.
+ *
+ * Re-exported from `sloseed.ts` rather than defined twice. The seeder writes the `slos` row and
+ * this file writes the `slo_observations` row that carries a foreign key onto it, so the two
+ * spellings must agree exactly — and two one-line functions returning `` `${x}.runs` `` is
+ * precisely the shape that drifts the day one of them grows a prefix. `sloseed.ts` owns it because
+ * it imports only types: importing the other way would pull the job runner into `beacon slo seed`.
+ */
+export { journeySloName } from './sloseed.ts'
+
+/**
+ * The `cause` line on a journey incident — the sentence an operator reads first.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **A SKIP IS NOT A FAILURE AT AN UNKNOWN STEP, AND SAYING SO SENT THREE INVESTIGATIONS WRONG.**
+ *
+ * This read `failing at step "${run.failedStep ?? 'unknown'}"` for every non-pass. A skip never
+ * sets `failedStep` — `runJourney` sets it only for a `fail` or an `error` — so all three SEV2s
+ * open against `identity.*` on the live estate on 2026-08-04 carried the cause *"failing at step
+ * \"unknown\""* when nothing had failed and no step had run.
+ *
+ * The real reason was in `lastError` the whole time ("registration is rate limited",
+ * "BEACON_HANDOFF_ORIGIN is not set"). But the cause is what the incident list, the page and the
+ * timeline show, and it described a different incident from the one that was open: it said the
+ * product was broken at a step nobody could name, when the truth was that the journey had
+ * declined to run and had said exactly why.
+ *
+ * The status is named for the other two as well, rather than "failing" standing in for both. A
+ * `fail` is the product and an `error` is usually Beacon; they have different owners, and one word
+ * covering both sends half the pages to the wrong team.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ *
+ * Pure and exported so it can be proved rather than described. The failure it prevents is a
+ * sentence, and a sentence is exactly the kind of thing that gets "fixed" back.
+ */
+export function incidentCauseFor(
+  title: string,
+  run: { readonly status: JourneyStatus; readonly failedStep: string | null; readonly error: string | null },
+): string {
+  if (run.status === 'skip') {
+    return `${title} — skipped: ${run.error ?? 'no reason recorded'}`
+  }
+  return `${title} — ${run.status} at step "${run.failedStep ?? 'unknown'}"`
 }
 
 export function registerHandlers(runner: JobRunner, deps: JobDeps): JobRunner {
@@ -330,7 +373,7 @@ export function registerHandlers(runner: JobRunner, deps: JobDeps): JobRunner {
       subject: name,
       severity: severityFor(definition.critical),
       productGroup: definition.productGroup,
-      cause: `${definition.title} — failing at step "${run.failedStep ?? 'unknown'}"`,
+      cause: incidentCauseFor(definition.title, run),
       lastError: run.error ?? undefined,
       detectedBy: 'journey',
       at: run.startedAt,

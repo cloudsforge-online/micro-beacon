@@ -166,6 +166,10 @@ export const ECOSYSTEM_EVENT_BUS: JourneyDefinition = {
   name: 'ecosystem.event-bus',
   title: 'A fact committed in one service reaches another service’s read model',
   productGroup: GROUPS.account,
+  // `activity`, the CONSUMER. identity is dialled first, but only to commit the fact; what this
+  // journey waits for is the fact arriving in activity's read model, so a red here is delivery
+  // having stopped and activity is the end of that pipe.
+  service: 'activity',
   // Not critical, deliberately, and this is a decision rather than an oversight. A critical
   // journey refuses every release from the moment it is declared, and this one has no history in
   // any deployment yet. It is promoted to critical when it has run on a schedule long enough for
@@ -269,6 +273,9 @@ export const ECOSYSTEM_ONE_ACTIVITY: JourneyDefinition = {
   name: 'ecosystem.one-activity',
   title: 'The activity history is one history, whichever service serves it',
   productGroup: GROUPS.account,
+  // `hub-api`. The assertion is that hub's projection of the history agrees with activity's own,
+  // and hub is the one that has to reproduce somebody else's answer.
+  service: 'hub-api',
   critical: false,
   async run(ctx) {
     const identity = ctx.target('identity')
@@ -373,6 +380,8 @@ export const ECOSYSTEM_ONE_PORTFOLIO: JourneyDefinition = {
   name: 'ecosystem.one-portfolio',
   title: 'The portfolio total is the same number on both of hub’s paths to it',
   productGroup: GROUPS.wallet,
+  // `hub-api`, and the title says why: both paths being compared are hub's own.
+  service: 'hub-api',
   critical: false,
   async run(ctx) {
     const identity = ctx.target('identity')
@@ -450,6 +459,10 @@ export const ECOSYSTEM_ONE_ACCOUNT: JourneyDefinition = {
   name: 'ecosystem.one-account',
   title: 'One token means the same person in identity, hub and activity',
   productGroup: GROUPS.account,
+  // `identity`. Three services are dialled and the thing under test is whether one identity
+  // token means the same subject in all of them — that is identity's claim about itself, and the
+  // other two are the witnesses.
+  service: 'identity',
   critical: false,
   async run(ctx) {
     const identity = ctx.target('identity')
@@ -542,6 +555,7 @@ export const ECOSYSTEM_TRIAL_BALANCE: JourneyDefinition = {
   name: 'ecosystem.trial-balance',
   title: 'The ledger’s trial balance is exactly zero, over a journal with entries in it',
   productGroup: GROUPS.wallet,
+  service: 'ledger',
   critical: false,
   async run(ctx) {
     const identity = ctx.target('identity')
