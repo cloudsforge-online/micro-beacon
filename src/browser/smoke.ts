@@ -447,6 +447,65 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
     path: '/',
     session: 'does-not-have-to',
     renders: [/Archipelago/i, /Chronicle/i],
+    /*
+     * THE SECOND HALF OF THE 2026-08-05 AUDIT, AND THE ONE THAT HAD NOTHING TO GUARD YET.
+     *
+     * `micro-aetherholm-assets` produced 101 FLUX 2 Pro images and `aetherholm-web` referenced
+     * NONE of them — no `<img>`, no `background-image`, no fetch (micro-org#175). That is the
+     * other failure mode this tier was written for and the milder one: Tessera served art that
+     * 404'd, Aetherholm served none at all, and both render a product that looks like a
+     * spreadsheet while every check stays green. The audit's own closing line asked for this
+     * entry "the moment its art is wired". It is wired; here it is.
+     *
+     * Five declarations for seventy-four served pictures, chosen so that each names a DIFFERENT
+     * directory under the one `public/art/` copy. One would prove the mount exists; five prove it
+     * is whole, which is the failure that actually happens — a `.dockerignore` or a COPY that
+     * takes some subdirectories and not others leaves a product that works everywhere the
+     * developer looked.
+     *
+     * Declared, never constructed. Every path below is spelled exactly as `MANIFEST.json` spells
+     * it, including the `-<w>x<h>` suffix that is part of the filename rather than a convention —
+     * see `RequiredImage` for why a declared name that has drifted is safe and a constructed one
+     * is not.
+     */
+    imagery: [
+      {
+        path: '/art/title/wordmark-1024x384.png',
+        why:
+          "the title strip under the shared bar, on EVERY route. The company bar marks `worlds` " +
+          'current because a title is played through Forge Worlds, so this wordmark is the only ' +
+          'place any screen says which game the player opened — a hole here is the product ' +
+          'nameless. It is also the one image `index.html` preloads.',
+      },
+      {
+        path: '/art/keyart/hero-1920x768.png',
+        why:
+          'the hero of `/chronicle`, which is this game\'s ONLY anonymous surface — every other ' +
+          'route is behind ProtectedRoute. It is therefore the one page a signed-out stranger ' +
+          'can be shown, and the only in-page picture this tier could observe without a session.',
+      },
+      {
+        path: '/art/buildings/skyhall-512x512.png',
+        why:
+          'one of the twenty building sprites, which are the art in this client that is CONTENT ' +
+          'rather than decoration: /cities renders a city as its buildings. `skyhall` because it ' +
+          'is the first type in `aetherholm/src/content.ts` and every city has one.',
+      },
+      {
+        path: '/art/icons/resource-aether-512x512.png',
+        why:
+          "the Aether row of the stocks table, on the screen a player spends the game looking at. " +
+          'A different directory from the sprites above, which is the point of declaring both.',
+      },
+      {
+        path: '/art/islands/highwind_reef-1024x1024.png',
+        why:
+          'one of the twelve island archetypes shown beside the selected island on the map. The ' +
+          'heaviest directory in the set at 7 MB, so it is the first thing a size-conscious ' +
+          'change would drop from the image — and the last anybody would notice, since the map ' +
+          'is SVG and would keep drawing.',
+      },
+    ],
   },
   {
     key: 'tessera',
