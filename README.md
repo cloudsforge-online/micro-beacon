@@ -405,10 +405,16 @@ length.
 ### 7.1 The smoke tier — `pnpm smoke`
 
 ```
-beacon smoke [--apex <host>] [--surface <key>] [--browser <path>] [--timeout <ms>]
+beacon smoke [--apex <host>] [--env <label>] [--surface <key>] [--browser <path>] [--timeout <ms>]
 ```
 
 Signs in for real, then loads all sixteen surfaces in one Chromium session, through the gateway.
+
+`--env` names the environment and is a **suffix on each subdomain**, not a prefix on the apex:
+`--env testnet` drives `hub-testnet.<apex>`, and the apex surface at `testnet.<apex>`. It is a
+separate flag because both environments are served on one zone — a wildcard certificate matches
+exactly one label, so the `hub.testnet.<apex>` shape this replaced failed the TLS handshake at
+Cloudflare's edge and could never have been smoked at all.
 
 **It intercepts nothing.** Every byte those pages receive came from the estate. That sentence is
 the whole product, because the reason it exists is that the estate shipped completely unusable and

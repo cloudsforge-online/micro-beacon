@@ -209,8 +209,10 @@ export interface ContractualEmpty {
  *
  * Keys and subdomains are read off `ui/packages/ui/src/surfaces.ts`, which is the registry whose
  * own header records that this list was maintained by hand in eight places and had already
- * drifted. The apex is NOT recorded here — it comes from configuration, so that pointing this
- * suite at staging is a variable rather than an edit.
+ * drifted. Neither the apex NOR THE ENVIRONMENT is recorded here — both come from configuration,
+ * so that pointing this suite at another environment is a variable rather than an edit. See
+ * {@link surfaceHost} for how the two are combined, and for why the environment stopped being
+ * expressible as an apex on 2026-08-05.
  */
 export const SMOKE_SURFACES: readonly SmokeSurface[] = [
   {
@@ -395,9 +397,39 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
   },
 ]
 
+/**
+ * The hostname a surface is served on, in an environment. `hub` + `` -> `hub.<apex>`; `hub` +
+ * `testnet` -> `hub-testnet.<apex>`; the apex surface -> `<apex>` and `testnet.<apex>`.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **AN ENVIRONMENT IS A SUFFIX ON THE SUBDOMAIN. IT WAS AN APEX, AND THAT SHAPE WAS UNREACHABLE.**
+ *
+ * Until 2026-08-05 an environment was named by handing this suite a different apex —
+ * `--apex testnet.cloudsforge.online`, composing `hub.testnet.cloudsforge.online`. Cloudflare's
+ * Universal SSL certificate is `*.cloudsforge.online` plus the apex, a wildcard matches exactly
+ * ONE label, and so every two-label name failed the TLS handshake at Cloudflare's edge before a
+ * request reached the estate. Testnet was configured and publicly unreachable, and this suite —
+ * whose one job is to notice — could not have told anyone, because it would have died in
+ * `estateReachable` with "nothing is serving TLS".
+ *
+ * Advanced Certificate Manager covers two labels, is paid, and is not bought. So the environment
+ * moved inside the FIRST LABEL, both environments now share the zone, and `--apex` alone can no
+ * longer name one: `cloudsforge.online` is mainnet in both directions. `--env` is what names it.
+ *
+ * The apex surface — this estate's marketing site, whose registry subdomain is the empty string —
+ * takes the environment label ALONE, because `-testnet.cloudsforge.online` is not a legal DNS
+ * label. That is the same rule `envLabel()` implements in `ui/packages/ui/src/surfaces.ts` and
+ * `CF_SITE_HOST` carries in `deploy/compose/env/traefik.testnet.env`.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export function surfaceHost(apex: string, subdomain: string, env = ''): string {
+  const label = env === '' ? subdomain : subdomain === '' ? env : `${subdomain}-${env}`
+  return label === '' ? apex : `${label}.${apex}`
+}
+
 /** `https://hub.apex/path`, or `https://apex/path` for the apex surface. */
-export function surfaceUrl(apex: string, surface: SmokeSurface): string {
-  const host = surface.subdomain === '' ? apex : `${surface.subdomain}.${apex}`
+export function surfaceUrl(apex: string, surface: SmokeSurface, env = ''): string {
+  const host = surfaceHost(apex, surface.subdomain, env)
   return `https://${host}${surface.path.startsWith('/') ? surface.path : `/${surface.path}`}`
 }
 
@@ -407,8 +439,8 @@ export function surfaceUrl(apex: string, surface: SmokeSurface): string {
  * nested route, so `admin` and `admin-foresight` are two surfaces on one host. A certificate
  * belongs to the host, not to the section, so pinning it twice would just do the work twice.
  */
-export function smokeHosts(apex: string): readonly string[] {
-  const hosts = SMOKE_SURFACES.map((s) => (s.subdomain === '' ? apex : `${s.subdomain}.${apex}`))
+export function smokeHosts(apex: string, env = ''): readonly string[] {
+  const hosts = SMOKE_SURFACES.map((s) => surfaceHost(apex, s.subdomain, env))
   return [...new Set(hosts)]
 }
 
@@ -661,8 +693,9 @@ export async function visit(
   surface: SmokeSurface,
   apex: string,
   timeoutMs: number,
+  env = '',
 ): Promise<PageObservation> {
-  const url = surfaceUrl(apex, surface)
+  const url = surfaceUrl(apex, surface, env)
   const before = mark(collected)
   let status: number | null = null
   let navigationError: string | null = null
@@ -736,8 +769,9 @@ export async function signIn(
   apex: string,
   credentials: Credentials,
   timeoutMs: number,
+  env = '',
 ): Promise<SignInResult> {
-  const url = `https://hub.${apex}/account/login`
+  const url = `https://${surfaceHost(apex, 'hub', env)}/account/login`
   const findings: Finding[] = []
   const at = (check: string, detail: string): void => {
     findings.push({ surfaceKey: 'sign-in', check, detail })
@@ -811,6 +845,12 @@ export async function signIn(
 
 export interface SmokeConfig {
   readonly apex: string
+  /**
+   * The environment label, empty for the unadorned one. See {@link surfaceHost}: this is a suffix
+   * on every surface's subdomain, NOT a prefix on `apex`, and it has to be a separate field
+   * because since 2026-08-05 both environments are served on the same zone.
+   */
+  readonly env?: string
   readonly credentials: Credentials
   readonly browser: BrowserConfig
   /** A subset of `SMOKE_SURFACES`, for driving one surface while fixing it. Defaults to all. */
@@ -833,6 +873,7 @@ export interface SmokeResult {
 export async function runSmoke(config: SmokeConfig): Promise<SmokeResult> {
   const { withPage } = await import('./driver.ts')
   const surfaces = config.surfaces ?? SMOKE_SURFACES
+  const env = config.env ?? ''
   return await withPage(config.browser, async (page, collected) => {
     const signInResult = await signIn(
       page,
@@ -840,11 +881,12 @@ export async function runSmoke(config: SmokeConfig): Promise<SmokeResult> {
       config.apex,
       config.credentials,
       config.browser.timeoutMs,
+      env,
     )
     const observations: PageObservation[] = []
     const findings: Finding[] = [...signInResult.findings]
     for (const surface of surfaces) {
-      const observation = await visit(page, collected, surface, config.apex, config.browser.timeoutMs)
+      const observation = await visit(page, collected, surface, config.apex, config.browser.timeoutMs, env)
       observations.push(observation)
       findings.push(...checkSurface(observation, surface, config.credentials.handle))
     }
@@ -866,18 +908,20 @@ export async function runSmoke(config: SmokeConfig): Promise<SmokeResult> {
 export async function estateReachable(
   apex: string,
   timeoutMs = 3_000,
+  env = '',
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
   const { inspectCertificate } = await import('./estatecert.ts')
+  const host = surfaceHost(apex, 'hub', env)
   try {
-    await inspectCertificate(`hub.${apex}`, { timeoutMs })
+    await inspectCertificate(host, { timeoutMs })
     return { ok: true }
   } catch (err) {
     return {
       ok: false,
       reason:
-        `nothing is serving TLS at hub.${apex}:443 ` +
+        `nothing is serving TLS at ${host}:443 ` +
         `(${err instanceof Error ? err.message : String(err)}) — bring the estate up, or set ` +
-        'BEACON_SMOKE_APEX to one that is running',
+        'BEACON_SMOKE_APEX / BEACON_SMOKE_ENV to an estate that is running',
     }
   }
 }

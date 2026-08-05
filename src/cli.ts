@@ -91,13 +91,17 @@ beacon browser [--targets <name=url,...>] [--browser <path>] [--estate-ca <file>
 exit codes: 0 every declared journey passed · 1 one failed, errored or SKIPPED · 2 nothing
 was declared, or the arguments were wrong
 
-beacon smoke [--apex <host>] [--browser <path>] [--timeout <ms>] [--surface <key>]
+beacon smoke [--apex <host>] [--env <label>] [--browser <path>] [--timeout <ms>] [--surface <key>]
 
   Signs in for real and loads all sixteen surfaces through the gateway. Nothing is stubbed,
   intercepted or fulfilled from a fixture; the gateway's own certificate is accepted by pinning
   its public key, and no other certificate error is excused anywhere.
 
   --apex      the estate's apex. Defaults to BEACON_SMOKE_APEX, then cloudsforge.localtest.me.
+  --env       the environment, as a SUFFIX ON EACH SUBDOMAIN: --env testnet drives
+              hub-testnet.<apex>, and the apex surface at testnet.<apex>. Defaults to
+              BEACON_SMOKE_ENV, then empty. It is not an apex prefix: both environments are
+              served on one zone, because a wildcard certificate matches only one label.
   --browser   a Chromium executable. Defaults to BEACON_BROWSER_EXECUTABLE.
   --timeout   per-operation timeout in ms. Default 20000.
   --surface   run one surface only, repeatable. Defaults to all sixteen.
@@ -472,6 +476,12 @@ export async function runBrowser(args: BrowserArgs): Promise<0 | 1 | 2> {
 
 interface SmokeArgs {
   readonly apex: string
+  /**
+   * The environment label, empty for the unadorned one. A SUFFIX on each subdomain rather than a
+   * prefix on the apex — see `browser/smoke.ts`'s `surfaceHost` for why, which is that the shape
+   * it replaced could not complete a TLS handshake and so could never have been smoked at all.
+   */
+  readonly env: string
   readonly executablePath: string
   readonly timeoutMs: number
   readonly surfaces: readonly string[]
@@ -482,6 +492,7 @@ export function parseSmokeArgs(
   source: Record<string, string | undefined>,
 ): SmokeArgs | null {
   let apex = source['BEACON_SMOKE_APEX'] ?? 'cloudsforge.localtest.me'
+  let env = source['BEACON_SMOKE_ENV'] ?? ''
   let executablePath = source['BEACON_BROWSER_EXECUTABLE'] ?? ''
   let timeoutMs = 20_000
   const surfaces: string[] = []
@@ -489,19 +500,26 @@ export function parseSmokeArgs(
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === '--apex') apex = args[++i] ?? ''
+    else if (arg === '--env') env = args[++i] ?? ''
     else if (arg === '--browser') executablePath = args[++i] ?? ''
     else if (arg === '--timeout') timeoutMs = Number(args[++i] ?? '')
     else if (arg === '--surface') surfaces.push(args[++i] ?? '')
     else if (arg?.startsWith('--apex=')) apex = arg.slice('--apex='.length)
+    else if (arg?.startsWith('--env=')) env = arg.slice('--env='.length)
     else if (arg?.startsWith('--browser=')) executablePath = arg.slice('--browser='.length)
     else if (arg?.startsWith('--timeout=')) timeoutMs = Number(arg.slice('--timeout='.length))
     else if (arg?.startsWith('--surface=')) surfaces.push(arg.slice('--surface='.length))
     else return null
   }
   if (!/^[a-z0-9.-]+$/.test(apex)) return null
+  // A single DNS label, or nothing. NO DOT: a value containing one would be somebody reaching for
+  // the old apex-prefix shape — `--env testnet.cloudsforge.online` — and composing
+  // `hub-testnet.cloudsforge.online.<apex>`, which resolves to nothing and reads like a typo
+  // rather than like a misunderstanding. Refusing it says which of the two it is.
+  if (env !== '' && !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(env)) return null
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000) return null
   if (surfaces.some((s) => s === '')) return null
-  return { apex, executablePath, timeoutMs, surfaces }
+  return { apex, env, executablePath, timeoutMs, surfaces }
 }
 
 /**
@@ -526,7 +544,7 @@ export async function runSmokeCommand(args: SmokeArgs): Promise<0 | 1 | 2> {
   const { collectPins } = await import('./browser/estatecert.ts')
   const { browserAvailable } = await import('./browser/driver.ts')
 
-  const reachable = await smoke.estateReachable(args.apex)
+  const reachable = await smoke.estateReachable(args.apex, undefined, args.env)
   if (!reachable.ok) {
     stderr.write(`${reachable.reason}\n`)
     return 2
@@ -549,13 +567,17 @@ export async function runSmokeCommand(args: SmokeArgs): Promise<0 | 1 | 2> {
     return 2
   }
 
-  const hosts = selected.map((s) => (s.subdomain === '' ? args.apex : `${s.subdomain}.${args.apex}`))
+  // Through `surfaceHost`, not composed here: this used to spell the `<sub>.<apex>` rule a second
+  // time, and a second copy of that rule would have kept pinning MAINNET certificates for a run
+  // driving testnet pages — every host pinned, none of them the ones visited.
+  const hosts = selected.map((s) => smoke.surfaceHost(args.apex, s.subdomain, args.env))
   const pins = await collectPins(hosts)
   for (const reason of pins.reasons) stdout.write(`tls  ${reason}\n`)
   stdout.write('\n')
 
   const result = await smoke.runSmoke({
     apex: args.apex,
+    env: args.env,
     credentials: {
       identifier: process.env['BEACON_SMOKE_IDENTIFIER'] ?? 'estate-admin@example.test',
       password: process.env['BEACON_SMOKE_PASSWORD'] ?? 'correct-horse-battery-staple-42',

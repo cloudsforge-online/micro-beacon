@@ -10,8 +10,38 @@ import assert from 'node:assert/strict'
 import { after, before, describe, it } from 'node:test'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { main, parseArgs, render } from './cli.ts'
+import { main, parseArgs, parseSmokeArgs, render } from './cli.ts'
 import type { GateDecision } from './gate.ts'
+
+describe('the smoke tier is pointed at an environment by a LABEL, not by an apex', () => {
+  /**
+   * Until 2026-08-05 an environment was named by handing this command a different apex. That
+   * shape — `hub.testnet.cloudsforge.online` — is two labels under a wildcard certificate that
+   * matches one, so it failed the TLS handshake at Cloudflare's edge and this suite could never
+   * have reached it. Both environments now share a zone and the environment is a suffix on each
+   * subdomain, so there has to be a second variable; these pin that it exists and is bounded.
+   */
+  it('has no environment by default, which is the unadorned estate', () => {
+    assert.equal(parseSmokeArgs([], {})?.env, '')
+    assert.equal(parseSmokeArgs([], {})?.apex, 'cloudsforge.localtest.me')
+  })
+
+  it('reads --env, --env= and BEACON_SMOKE_ENV', () => {
+    assert.equal(parseSmokeArgs(['--env', 'testnet'], {})?.env, 'testnet')
+    assert.equal(parseSmokeArgs(['--env=staging'], {})?.env, 'staging')
+    assert.equal(parseSmokeArgs([], { BEACON_SMOKE_ENV: 'testnet' })?.env, 'testnet')
+    // The flag beats the environment, as every other option here does.
+    assert.equal(parseSmokeArgs(['--env=staging'], { BEACON_SMOKE_ENV: 'testnet' })?.env, 'staging')
+  })
+
+  it('REFUSES a dotted value, which is somebody writing the old apex shape', () => {
+    // `--env testnet.cloudsforge.online` would compose `hub-testnet.cloudsforge.online.<apex>`.
+    // That resolves to nothing and reads like a typo; refusing it says which mistake it is.
+    assert.equal(parseSmokeArgs(['--env', 'testnet.cloudsforge.online'], {}), null)
+    assert.equal(parseSmokeArgs(['--env', '-testnet'], {}), null, 'not a legal DNS label')
+    assert.equal(parseSmokeArgs(['--env', 'TESTNET'], {}), null, 'labels are lower case')
+  })
+})
 
 describe('argument parsing', () => {
   it('requires a release', () => {

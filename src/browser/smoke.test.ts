@@ -39,6 +39,7 @@ import {
   runSmoke,
   since,
   smokeHosts,
+  surfaceHost,
   surfaceUrl,
   type Credentials,
   type PageObservation,
@@ -408,6 +409,34 @@ test('the manifest covers the sixteen surfaces the estate serves, each exactly o
 test('the apex surface is the apex, not a subdomain of it', () => {
   assert.equal(surfaceUrl('example.test', surface('site')), 'https://example.test/')
   assert.equal(surfaceUrl('example.test', surface('hub')), 'https://hub.example.test/')
+})
+
+test('an environment is a SUFFIX on the subdomain, and stands alone on the apex surface', () => {
+  // The shape this replaced was `hub.testnet.example.test` — a second label under a wildcard
+  // certificate that matches one, so it failed the TLS handshake at the edge and this suite would
+  // have refused the whole estate as unreachable rather than reporting anything about it.
+  assert.equal(surfaceHost('example.test', 'hub', 'testnet'), 'hub-testnet.example.test')
+  assert.equal(surfaceUrl('example.test', surface('hub'), 'testnet'), 'https://hub-testnet.example.test/')
+  // The apex surface takes the label ALONE: its subdomain is the empty string, and
+  // `-testnet.example.test` is not a legal DNS label.
+  assert.equal(surfaceHost('example.test', '', 'testnet'), 'testnet.example.test')
+  assert.equal(surfaceUrl('example.test', surface('site'), 'testnet'), 'https://testnet.example.test/')
+  // No environment is the unadorned estate, in both cases, which is what every existing caller
+  // gets by not passing one.
+  assert.equal(surfaceHost('example.test', 'hub'), 'hub.example.test')
+  assert.equal(surfaceHost('example.test', ''), 'example.test')
+})
+
+test('every hostname the run pins is the environment it is about to visit', () => {
+  // The failure this pins: `cli.ts` composed the pin list itself with a second copy of the
+  // `<sub>.<apex>` rule. Left alone, a `--env testnet` run would have pinned sixteen MAINNET
+  // certificates and then visited sixteen testnet pages — every certificate rejected, on an
+  // estate that was healthy.
+  const hosts = smokeHosts('example.test', 'testnet')
+  const visited = SMOKE_SURFACES.map((s) => new URL(surfaceUrl('example.test', s, 'testnet')).host)
+  assert.deepEqual([...new Set(visited)].sort(), [...hosts].sort())
+  assert.ok(hosts.includes('hub-testnet.example.test'))
+  assert.ok(hosts.includes('testnet.example.test'), 'the apex surface')
 })
 
 test('every surface names at least one word only its own bundle produces', () => {
