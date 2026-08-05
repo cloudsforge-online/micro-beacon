@@ -79,8 +79,10 @@
  *      answer". So an empty registry is green and a registry that did not load is red, decided by
  *      the estate's own design system rather than by a regex this repository invented.
  *   5. **No failed request and no uncaught exception**, from `driver.ts`'s collectors. The Worlds
- *      registry defect is exactly this and nothing else: `ERR_FAILED` on
- *      `worlds-api.<apex>/v1/titles`.
+ *      registry defect was exactly this and nothing else: `ERR_FAILED` on
+ *      `worlds-api.<apex>/v1/titles`, a hostname that resolved nowhere. Both halves are fixed —
+ *      the bundle calls `api.` and the router for the dead name is gone — and the fixture for it
+ *      is kept in `smoke.test.ts` because the SHAPE recurs.
  *   6. **No console error.** Asked for explicitly, and fatal HERE where it is not fatal in
  *      `assertClean` — see `SMOKE_CONSOLE_IS_FATAL` below for why the two differ on purpose.
  *   7. **The surface's own words are on screen.** A gateway that routed every hostname to one

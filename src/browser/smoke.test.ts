@@ -115,10 +115,16 @@ test('an EMPTY state is not a failure — the market answered with nothing, and 
 })
 
 test('THE WORLDS REGISTRY DEFECT IS RED: the frontend calls a host the gateway does not route', () => {
-  // Verbatim from Chromium against the running estate. `worlds-web` asks
-  // `worlds-api.<apex>/v1/titles`; that hostname has no router, so the preflight is refused and
-  // the fetch fails. The page still answers 200 and still renders 900 characters of copy, which
-  // is precisely why nothing else caught it.
+  // Verbatim from Chromium against the running estate on 2026-08-05, kept as a fixture because it
+  // is the shape this check exists to catch. `worlds-web` asked `worlds-api.<apex>/v1/titles`;
+  // that hostname resolved nowhere, so the preflight was refused and the fetch failed. The page
+  // still answered 200 and still rendered 900 characters of copy, which is precisely why nothing
+  // else caught it.
+  //
+  // BOTH SIDES ARE FIXED NOW — `API_SURFACE` is `'api'` and the `cf-api-worlds-api` router is
+  // deleted — so this is a recorded observation, not a live address. It must NOT be "updated" to a
+  // working host: the assertion is that a failed request makes a 200 page RED, and swapping in a
+  // host that works deletes the only case that proves it.
   const observation = healthy({
     surfaceKey: 'worlds',
     url: 'https://worlds.cloudsforge.localtest.me/',
