@@ -79,6 +79,7 @@ import { T3_SCENARIOS, type Scenario } from './catalogue.ts'
 import { FORESIGHT_IMPLEMENTATIONS } from './foresightjourneys.ts'
 import { WALLET_IMPLEMENTATIONS } from './walletjourneys.ts'
 import { DASHBOARD_IMPLEMENTATIONS } from './dashboardjourneys.ts'
+import { MEDIA_IMPLEMENTATIONS } from './mediajourneys.ts'
 import type { Operator } from './fixtures.ts'
 
 /**
@@ -601,6 +602,10 @@ const IMPLEMENTATIONS: Readonly<Record<string, Implementation>> = {
   ...FORESIGHT_IMPLEMENTATIONS,
   ...WALLET_IMPLEMENTATIONS,
   ...DASHBOARD_IMPLEMENTATIONS,
+  // User-uploaded images. Its own file for the same reason the money journeys have one: it carries
+  // its own apparatus — a byte-built PNG fixture and two in-page evaluations — and folding it in
+  // would bury the registry it is joining.
+  ...MEDIA_IMPLEMENTATIONS,
 }
 
 /* ------------------------------------------------------------------ the declaration */

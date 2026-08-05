@@ -153,6 +153,28 @@ test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
     'BJ-FOR-13',
     'BJ-FOR-14',
     'BJ-FOR-17',
+    // ── BJ-MED-01/02/03 ARE IMPLEMENTED AND HAVE **NOT** BEEN DRIVEN. SAYING SO IS THE POINT. ──
+    //
+    // Every other id in this list was run in Chromium against the estate before it was added.
+    // These three have not been, and the reason is not that nobody tried: they cannot be run at
+    // all on this estate, because `micro-studio` HAS NO GATEWAY ROUTER. It is a container on the
+    // compose network with no `Host()` rule anywhere in `deploy/gateway/dynamic/estate-web.yml`,
+    // so there is no address a browser can reach it at, and `BEACON_TARGETS` has no `studio` entry
+    // to resolve. `undeclared()` reports them as `no address for studio` for exactly this reason.
+    //
+    // They are recorded here rather than quietly omitted, and they are not marked `blocked`,
+    // because both alternatives would misreport the state. `blocked` means "cannot be written as
+    // code at all"; these ARE written, and the code is the part that is finished. Omitting them
+    // would make a shipped feature look untested rather than untestable-here. The gap is one
+    // router and one target, both named in the report that accompanied this change.
+    //
+    // This note comes out — and these three move up into the driven set above — the first time
+    // they are run green against an estate that routes studio. If that never happens, this comment
+    // is the record that a browser test was written for a path no browser can reach, which is a
+    // finding rather than a formality.
+    'BJ-MED-01',
+    'BJ-MED-02',
+    'BJ-MED-03',
     'BJ-WAL-01',
     'BJ-WAL-08',
     'BJ-WAL-09',

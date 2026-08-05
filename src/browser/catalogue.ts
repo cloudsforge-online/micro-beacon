@@ -439,6 +439,22 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   scenario('BJ-FOR-14', J, 'Portfolio by address: every figure equals the contract’s own storage', 'presentation', ['foresight', 'chain'], { gate: true }),
   scenario('BJ-FOR-17', J, 'The refusal list renders with no account, and no request carries a credential', 'client-request', ['foresight'], { gate: true }),
 
+  /* ---- user-uploaded images
+   *
+   * These are T3 by construction rather than by assignment. A browser upload is a CROSS-ORIGIN
+   * request carrying an Authorization header, so it is preflighted — and a preflight is enforced
+   * by a browser and by nothing else. A stubbed tier cannot see a missing allow-header, and an
+   * HTTP-level journey from this process cannot either, because Node's fetch neither preflights
+   * nor enforces CORS. Only a real page on a real surface origin can.
+   *
+   * `studio` is named in `needs` and is not routed through the gateway today, so these will show
+   * as undeclared until it is. That is the honest state: `undeclared()` prints the reason, which
+   * is the behaviour rule 2 asks for — a scenario that cannot run must say so rather than pass.
+   */
+  scenario('BJ-MED-01', E, 'Upload an image on Market: it is stored, stripped of its location, and the browser decodes what is served', 'presentation', ['market', 'studio', 'identity'], { gate: true }),
+  scenario('BJ-MED-02', E, 'A script-bearing SVG and a wrong-magic-byte file are both refused, whatever Content-Type they claim', 'client-request', ['market', 'studio', 'identity'], { outcome: 'refusal', ownedBy: 'studio/src/imagebytes.test.ts', gate: true }),
+  scenario('BJ-MED-03', J, 'Upload an image on Foresight: the same, from the other origin the CORS list must cover', 'presentation', ['foresight', 'studio', 'identity'], {}),
+
   /* ---- group Q */
   scenario('BJ-COM-01', Q, 'Found a token-gated community: the treasury accounts are visible after creation', 'presentation', ['community', 'ledger'], { blocked: NO_COMMUNITY_UI }),
   scenario('BJ-COM-02', Q, 'Join; holdings verified; membership re-evaluated, with the grace period on screen', 'presentation', ['community'], { blocked: NO_COMMUNITY_UI }),

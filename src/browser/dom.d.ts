@@ -64,3 +64,23 @@ declare function getComputedStyle(element: unknown): {
   readonly backgroundColor: string
   readonly fontFamily: string
 }
+
+/**
+ * BJ-MED-01 asks the browser to DECODE an uploaded image, rather than to measure its length.
+ *
+ * `naturalWidth` is the whole reason this is here: it is non-zero only once Chromium's own decoder
+ * has accepted the bytes, so reading it back is simultaneously a check that the metadata strip did
+ * not corrupt the file, that the `Content-Type` is right, and that `nosniff` did not make the
+ * browser refuse an image the estate served. No assertion available in this process can say that.
+ *
+ * Four members, added one at a time per the rule above: the two handlers, the source, and the one
+ * measurement that is actually asserted on. `naturalHeight` comes with `naturalWidth` because a
+ * width that matches on a height that does not is precisely the corruption worth catching.
+ */
+declare class Image {
+  onload: (() => void) | null
+  onerror: (() => void) | null
+  src: string
+  readonly naturalWidth: number
+  readonly naturalHeight: number
+}
