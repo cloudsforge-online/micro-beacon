@@ -51,6 +51,31 @@ interface HTMLElement {
 }
 
 /**
+ * The `<img>` tags a surface actually rendered, for `smoke.ts`'s imagery check.
+ *
+ * `naturalWidth` is the only member here that decides anything, and it is here for the same reason
+ * the `Image` declaration below carries it: it is non-zero ONLY after Chromium's own decoder has
+ * accepted the bytes. Reading it off a tag the surface rendered — rather than off one this suite
+ * constructed — is what makes the assertion "the reader saw a picture" instead of "the markup
+ * claims a picture". An `<img>` whose `src` 404s, whose bytes are truncated, or whose
+ * `Content-Type` makes `nosniff` refuse it all report the same zero.
+ *
+ * `getAttribute` is here rather than a `src` property because the two differ in exactly the case
+ * this check exists for: the PROPERTY resolves `src=""` to the document's own URL, so an `<img>`
+ * with no source reads back as one pointing at the page. The ATTRIBUTE reads back the empty string
+ * it was authored as, which is the "never had an image" case the audit had to tell apart from
+ * "has one that fails to load".
+ */
+interface HTMLImageElement {
+  readonly currentSrc: string
+  readonly naturalWidth: number
+  readonly complete: boolean
+  readonly alt: string
+  readonly loading: string
+  getAttribute(name: string): string | null
+}
+
+/**
  * `smoke.ts` asks whether the page is PAINTED, not just mounted.
  *
  * Two members and no more. `backgroundColor` is the one that decides: every CloudsForge surface
@@ -77,6 +102,19 @@ declare function getComputedStyle(element: unknown): {
  * measurement that is actually asserted on. `naturalHeight` comes with `naturalWidth` because a
  * width that matches on a height that does not is precisely the corruption worth catching.
  */
+/**
+ * `smoke.ts` resolves a surface's DECLARED art with the same call the client makes.
+ *
+ * `tessera-web/src/lib/sprites.ts` does `createImageBitmap(await res.blob())`, so the smoke tier
+ * does too: a check that decoded the bytes some other way could pass on a file the product's own
+ * code path rejects. Two members, per the rule at the top of this file — the dimensions are the
+ * assertion, and a bitmap with a width has been through a real decoder.
+ */
+declare function createImageBitmap(source: unknown): Promise<{
+  readonly width: number
+  readonly height: number
+}>
+
 declare class Image {
   onload: (() => void) | null
   onerror: (() => void) | null

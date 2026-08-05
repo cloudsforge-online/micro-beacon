@@ -170,6 +170,48 @@ export interface SmokeSurface {
    * ════════════════════════════════════════════════════════════════════════════════════════════
    */
   readonly concludes?: readonly RegExp[]
+  /**
+   * Pictures this product cannot work without, as paths on this surface's OWN origin.
+   *
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   * **THE `<img>` CHECK COULD NOT HAVE CAUGHT THE DEFECT OF 2026-08-05, AND THIS IS WHY.**
+   *
+   * Tessera served 392 generated sprites to nobody for as long as the mount existed. It has no
+   * `<img>` tags at all: `src/render/renderer.ts` draws into a `<canvas>` from `ImageBitmap`s that
+   * `src/lib/sprites.ts` fetched, and a fetch that 404s leaves NO tag, NO broken icon and NO
+   * console error — `SpriteCache.fetchOne` catches its own failure by design, and reports the hole
+   * inside the app. So the page is a canvas of nothing while every DOM assertion available is
+   * satisfied.
+   *
+   * `emberkin` has the same exposure through a different door: its `.glb` models and its keyart
+   * reach the page through `fetch`, not markup.
+   *
+   * So imagery is DECLARED, and the tier resolves it in the browser: `fetch` from the page's own
+   * origin, then `createImageBitmap`. The bitmap is the assertion — non-zero dimensions mean
+   * Chromium's decoder accepted the bytes, which says in one number that the path routed, that the
+   * mount is populated, that the response was an image and that it was not truncated.
+   *
+   * ── WHY A LITERAL PATH, WHEN `asset-set.ts` ARGUES AGAINST SPELLING FILENAMES ────────────────
+   *
+   * Because the two are answering different questions. That module refuses to CONSTRUCT names,
+   * because a client that invents a filename forks the naming contract silently — which is the
+   * defect it was written after. This DECLARES one, and a declared name that has drifted goes red
+   * and gets read by a person. The failure modes are opposite: one passes while the product is
+   * broken, the other fails while the product is fine. Only the second is safe to have.
+   *
+   * Absent on most surfaces, and that is not an oversight — thirteen of the seventeen render no
+   * product imagery at all. An entry here is a claim that this product is not one of them.
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   */
+  readonly imagery?: readonly RequiredImage[]
+}
+
+/** One picture a surface must be able to serve, and the reason it counts as load-bearing. */
+export interface RequiredImage {
+  /** Absolute path on the surface's own origin. Never another host — see `ContractualEmpty`. */
+  readonly path: string
+  /** Why this product is broken without it. Printed on nothing; read by whoever sees the red. */
+  readonly why: string
 }
 
 /**
@@ -382,6 +424,22 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
           'have a save, so this is the state it observes on every run.',
       },
     ],
+    // Emberkin's art is baked into the image rather than mounted, so it has never been missing.
+    // Declared anyway, because "baked in" is a property of today's Dockerfile: the day somebody
+    // moves this set to a volume — which is what `tessera-web` did — the failure is silent in
+    // exactly the same way, and this is the line that would go red instead.
+    imagery: [
+      {
+        path: '/art/species/cindercub-256x256.png',
+        why:
+          'the dex grid is fifty of these and renders nothing without them. A thumbnail rather ' +
+          'than a portrait because the thumbnail is what a first visit actually loads.',
+      },
+      {
+        path: '/art/title/wordmark-1024x384.png',
+        why: 'the credits page renders it as the product\'s own name; a hole there is the brand missing.',
+      },
+    ],
   },
   {
     key: 'aetherholm',
@@ -396,6 +454,29 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
     path: '/',
     session: 'does-not-have-to',
     renders: [/Wards/i, /Kiln/i],
+    // THE DEFECT THIS ENTRY IS WRITTEN FROM. `docker-compose.estate.yml` binds
+    // `estate/world-assets` at `/usr/share/nginx/html/world-assets`; on 2026-08-05 that directory
+    // held one README on BOTH networks, so the receipt 404'd, `loadAssetSet` returned `absent`,
+    // and every one of the 392 sprites was a named hole in a canvas. Nothing anywhere went red.
+    imagery: [
+      {
+        path: '/world-assets/SET.json',
+        why:
+          'the mount\'s own receipt, written by `tessera-assets/materialise.py`. `asset-set.ts` ' +
+          'reads it BEFORE any sprite request, so a 404 here is not one missing picture — it is ' +
+          'the whole world, resolved to `absent` in a single request. It is JSON rather than an ' +
+          'image, so it is fetched and parsed rather than decoded.',
+      },
+      {
+        path: '/world-assets/tiles/ashfield-ground-a-256x128.png',
+        why:
+          'one real sprite, decoded, to prove the mount holds BYTES and not just a receipt. A ' +
+          'ground tile because ground is drawn first and its absence is the whole floor. The ' +
+          '`-256x128` suffix is the delivered geometry `project_iso.py` produced and is part of ' +
+          "the filename in `MANIFEST.json`; it is declared here, never constructed — see " +
+          '`RequiredImage` for why those are different things.',
+      },
+    ],
   },
 ]
 
@@ -456,6 +537,48 @@ export function smokeHosts(apex: string, env = ''): readonly string[] {
  * fixtures in `smoke.test.ts` are transcriptions of what the real estate actually returned, so the
  * suite's own red is reproducible after the estate is fixed.
  */
+/**
+ * One `<img>` the surface rendered, as the browser found it.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **WHY THIS IS NOT "AN `<img>` TAG EXISTS".**
+ *
+ * On 2026-08-05 the estate was audited for missing imagery and the answer was that Tessera served
+ * 392 generated sprites to nobody: the mount `docker-compose.estate.yml` binds at
+ * `/usr/share/nginx/html/world-assets` held one README, every sprite request 404'd on BOTH
+ * networks, and every check in the estate was green. The tags were all there. The pictures were
+ * not. A check that counts tags would have passed for as long as the defect lasted, which is the
+ * shape of defect this repository exists to refuse.
+ *
+ * So the recorded fact is `naturalWidth`, read off the page's own tag after the network went
+ * quiet. It is non-zero only once Chromium's decoder has accepted the bytes, so one number
+ * simultaneously says the URL resolved, the response was an image, it was not truncated, and
+ * `nosniff` did not make the browser refuse it. `mediajourneys.ts` reasons the same way about
+ * uploads; this applies it to what a surface serves.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export interface ImageOnPage {
+  /**
+   * The `src` ATTRIBUTE, exactly as authored. Empty when the tag has none.
+   *
+   * The attribute rather than the property, because `img.src` resolves `src=""` against the
+   * document and hands back the page's own URL — which would have made a sourceless tag
+   * indistinguishable from a working one. This is the field that separates "never had an image"
+   * from "has one that fails to load", and those two have different fixes.
+   */
+  readonly src: string
+  /** What the browser is actually showing, resolved. Empty when it never picked a candidate. */
+  readonly currentSrc: string
+  /** Chromium's decoded width. Zero means the reader has no picture, whatever the markup says. */
+  readonly naturalWidth: number
+  /** Whether the browser finished trying. False on a lazy tag below the fold, which is not a fault. */
+  readonly complete: boolean
+  /** `loading`. `lazy` and incomplete is a deferred fetch, not a broken image. */
+  readonly loading: string
+  /** `alt`. Never asserted on — it is in the message, because it names what the reader lost. */
+  readonly alt: string
+}
+
 export interface PageObservation {
   readonly surfaceKey: string
   readonly url: string
@@ -476,7 +599,43 @@ export interface PageObservation {
   readonly fontFamily: string
   /** The text of every `*-state--failed` / `*-state--forbidden` node on the page. */
   readonly failureStates: readonly string[]
+  /** Every `<img>` the surface rendered. Empty is legitimate — most surfaces render no image. */
+  readonly images: readonly ImageOnPage[]
+  /** One entry per `SmokeSurface.imagery` declaration, resolved in the browser. */
+  readonly requiredImages: readonly ResolvedImage[]
   readonly collected: Collected
+}
+
+/**
+ * What the browser made of one {@link RequiredImage}.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE URL IS ABSOLUTE, BUILT FROM THE SURFACE'S OWN ORIGIN, AND THAT IS NOT A DETAIL.**
+ *
+ * The first version of this fetched the declared PATH relative to whatever document the page was
+ * showing. It reported emberkin's entire art set as 404 on mainnet and unreachable on testnet, and
+ * both readings were wrong: an unauthenticated visit to `emberkin.<apex>` is redirected to
+ * `hub.<apex>/account/login`, so by the time the probe ran the document's origin was `hub`, and
+ * the check was asking the wrong host for a file it does not have.
+ *
+ * That is a false RED, which is worse than it sounds — a tier that cries wolf about missing art is
+ * a tier that gets ignored the week the art really is missing. So the origin is computed from the
+ * surface rather than read from the page, and it cannot drift with a redirect.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export interface ResolvedImage {
+  /** The declared path. */
+  readonly path: string
+  /** How it was resolved. See {@link resolveImagery} for why the two differ. */
+  readonly kind: 'image' | 'receipt'
+  /** A receipt's response status. Always `null` for an image — see `kind`. */
+  readonly status: number | null
+  /** An image's decoded width; `0` means the browser has no picture. `null` for a receipt. */
+  readonly naturalWidth: number | null
+  /** A receipt's body parsed as JSON. `null` for an image. */
+  readonly parsed: boolean | null
+  /** Why the browser could not get it. `null` when it did. */
+  readonly error: string | null
 }
 
 export interface Finding {
@@ -631,6 +790,76 @@ export function checkSurface(
     )
   }
 
+  // ── IMAGERY ────────────────────────────────────────────────────────────────────────────────
+  //
+  // Two findings, because there are two defects and they are repaired differently. A tag with no
+  // `src` is a surface that was never given a picture; a tag whose picture did not decode is a
+  // surface whose picture is not being served. Reporting them under one name sent the 2026-08-05
+  // audit looking for a missing generation run when the assets had existed for days and the mount
+  // was empty.
+  //
+  // A lazy tag that has not finished is neither: `loading="lazy"` defers below-the-fold images by
+  // design, and `emberkin`'s dex grid, `market`'s gallery and `foresight`'s market image all use
+  // it. Going red on those would be this tier failing a surface for being fast.
+  const sourceless = observation.images.filter((image) => image.src.trim() === '')
+  if (sourceless.length > 0) {
+    at(
+      'every image has a source',
+      `${observation.url} rendered ${sourceless.length} <img> tag(s) with no src attribute — ` +
+        'the markup reserves the space and no file was ever wired to it: ' +
+        sourceless
+          .slice(0, 3)
+          .map((image) => `alt="${image.alt}"`)
+          .join(' | '),
+    )
+  }
+
+  // The declared half. See `SmokeSurface.imagery`: this is the one that catches a product whose
+  // pictures never become `<img>` tags, which is the shape the 2026-08-05 defect actually had.
+  for (const resolved of observation.requiredImages) {
+    if (resolved.error !== null) {
+      at(
+        'the art this product needs is served',
+        `${observation.url} could not fetch ${resolved.path} from its own origin: ${resolved.error}`,
+      )
+    } else if (resolved.kind === 'receipt' && resolved.status !== 200) {
+      at(
+        'the art this product needs is served',
+        `${observation.url} answered HTTP ${resolved.status} for ${resolved.path} — this product ` +
+          'declares it as art it cannot work without, so the mount is unpopulated or unrouted',
+      )
+    } else if (resolved.parsed === false) {
+      at(
+        'the art this product needs is served',
+        `${observation.url} served ${resolved.path} with a 200 and a body that is not readable ` +
+          'JSON — the receipt the client reads before any picture is not a receipt',
+      )
+    } else if (resolved.kind === 'image' && resolved.naturalWidth === 0) {
+      at(
+        'the art this product needs is served',
+        `${observation.url} declares ${resolved.path} as art it cannot work without, and the ` +
+          'browser produced no picture from it — the path is unrouted, the mount is unpopulated, ' +
+          'the bytes are not an image, or a Content-Type made nosniff refuse the estate\'s own file',
+      )
+    }
+  }
+
+  const broken = observation.images.filter(
+    (image) =>
+      image.src.trim() !== '' && image.naturalWidth === 0 && (image.complete || image.loading !== 'lazy'),
+  )
+  if (broken.length > 0) {
+    at(
+      'every image on the page loaded',
+      `${observation.url} rendered ${broken.length} <img> tag(s) the browser could not decode — ` +
+        'the file is missing, unroutable or not an image, and the reader sees a broken icon: ' +
+        broken
+          .slice(0, 3)
+          .map((image) => `${image.src} (alt="${image.alt}")`)
+          .join(' | '),
+    )
+  }
+
   if (surface.session === 'shows-the-account' && !observation.bodyText.includes(handle)) {
     at(
       'the session reached this surface',
@@ -717,8 +946,39 @@ export async function visit(
       failureStates: Array.from(
         document.querySelectorAll('[class*="state--failed"], [class*="state--forbidden"]'),
       ).map((node) => (node as HTMLElement).innerText.replace(/\s+/g, ' ').slice(0, 200)),
+      // Read AFTER `networkidle` above, so a picture that was merely slow has already arrived and
+      // only a picture that is not coming reads back as zero.
+      images: Array.from(document.querySelectorAll('img')).map((node) => {
+        const image = node as HTMLImageElement
+        return {
+          src: image.getAttribute('src') ?? '',
+          currentSrc: image.currentSrc,
+          naturalWidth: image.naturalWidth,
+          complete: image.complete,
+          loading: image.loading,
+          alt: image.alt,
+        }
+      }),
     }))
-    .catch(() => ({ bodyText: '', backgroundColor: '', fontFamily: '', failureStates: [] as string[] }))
+    .catch(() => ({
+      bodyText: '',
+      backgroundColor: '',
+      fontFamily: '',
+      failureStates: [] as string[],
+      images: [] as ImageOnPage[],
+    }))
+
+  // ── THE DECLARED ART, RESOLVED INSIDE CHROMIUM ─────────────────────────────────────────────
+  //
+  // In the page rather than from Node, for the reason `mediajourneys.ts` sets out about uploads:
+  // a `fetch` from this process does not enforce CORS, does not carry the page's cookies, and does
+  // not run the browser's image decoder. All three are what is under test. `createImageBitmap` is
+  // the same call `tessera-web/src/lib/sprites.ts` makes, so a green here means the client's own
+  // code path works, not that a file exists somewhere.
+  // `url` and not `page.url()`: an unauthenticated visit to emberkin ends up on hub's sign-in, and
+  // asking hub for emberkin's art reports a missing picture that is being served. See
+  // `ResolvedImage`.
+  const requiredImages = await resolveImagery(page, surface.imagery ?? [], new URL(url).origin)
 
   return {
     surfaceKey: surface.key,
@@ -729,8 +989,96 @@ export async function visit(
     backgroundColor: read.backgroundColor,
     fontFamily: read.fontFamily,
     failureStates: read.failureStates,
+    images: read.images,
+    requiredImages,
     collected: since(collected, before),
   }
+}
+
+/**
+ * Fetch and decode each declared picture from the page's own origin.
+ *
+ * A path ending `.json` is a receipt and is PARSED; everything else is an image and is DECODED.
+ * The distinction is on the extension rather than on a flag because a receipt that has become an
+ * image, or the reverse, is a change somebody made on purpose and should have to say so here.
+ *
+ * Errors are carried, never thrown: one unreachable mount must not stop the other sixteen surfaces
+ * being visited, which is the same rule `PageObservation.navigationError` follows.
+ */
+export async function resolveImagery(
+  page: BrowserPage,
+  imagery: readonly RequiredImage[],
+  origin: string,
+): Promise<readonly ResolvedImage[]> {
+  if (imagery.length === 0) return []
+  const wanted = imagery.map((i) => ({
+    path: i.path,
+    kind: (i.path.endsWith('.json') ? 'receipt' : 'image') as 'image' | 'receipt',
+    url: `${origin.replace(/\/+$/, '')}${i.path}`,
+  }))
+  return await page
+    .evaluate(
+      async (targets: readonly { path: string; kind: 'image' | 'receipt'; url: string }[]) => {
+        const out: {
+          path: string
+          kind: 'image' | 'receipt'
+          status: number | null
+          naturalWidth: number | null
+          parsed: boolean | null
+          error: string | null
+        }[] = []
+        for (const target of targets) {
+          try {
+            if (target.kind === 'receipt') {
+              const res = await fetch(target.url)
+              let parsed: boolean | null = null
+              if (res.ok) {
+                parsed = true
+                try {
+                  await res.json()
+                } catch {
+                  parsed = false
+                }
+              }
+              out.push({ ...target, status: res.status, naturalWidth: null, parsed, error: null })
+              continue
+            }
+            // An IMAGE ELEMENT, not `fetch` + `createImageBitmap`. An image load is not subject to
+            // CORS for the purpose of rendering, so this reads the same answer whether or not the
+            // page has been redirected to a sign-in on another host — and `naturalWidth` is still
+            // Chromium's own decoder saying yes. `fetch` would have been blocked cross-origin and
+            // reported a missing picture that is being served perfectly well.
+            const width = await new Promise<number>((resolve) => {
+              const image = new Image()
+              image.onload = (): void => resolve(image.naturalWidth)
+              image.onerror = (): void => resolve(0)
+              image.src = target.url
+            })
+            out.push({ ...target, status: null, naturalWidth: width, parsed: null, error: null })
+          } catch (err) {
+            out.push({
+              ...target,
+              status: null,
+              naturalWidth: null,
+              parsed: null,
+              error: String(err).slice(0, 200),
+            })
+          }
+        }
+        return out
+      },
+      wanted,
+    )
+    .catch((err: unknown) =>
+      wanted.map((target) => ({
+        path: target.path,
+        kind: target.kind,
+        status: null,
+        naturalWidth: null,
+        parsed: null,
+        error: `the page could not be asked: ${String(err).slice(0, 160)}`,
+      })),
+    )
 }
 
 /* ------------------------------------------------------------------ the sign-in */

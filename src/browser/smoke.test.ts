@@ -42,6 +42,7 @@ import {
   surfaceHost,
   surfaceUrl,
   type Credentials,
+  type ImageOnPage,
   type PageObservation,
   type SmokeSurface,
 } from './smoke.ts'
@@ -92,7 +93,26 @@ function healthy(overrides: Partial<PageObservation> = {}): PageObservation {
     backgroundColor: 'rgb(14, 12, 10)',
     fontFamily: 'Inter, system-ui, ui-sans-serif',
     failureStates: [],
+    // Market's index renders its gallery only once something is listed, and this transcription is
+    // of the empty state. An imageless page is the honest default across most of the estate.
+    images: [],
+    // Market declares no `imagery`: its pictures are user-uploaded listing photographs, which no
+    // fixed path can name. Thirteen of the seventeen surfaces are in the same position.
+    requiredImages: [],
     collected: newSink(),
+    ...overrides,
+  }
+}
+
+/** An `<img>` the browser decoded. The shape a working picture has, for contrast below. */
+function loadedImage(overrides: Partial<ImageOnPage> = {}): ImageOnPage {
+  return {
+    src: '/world-assets/tiles/ashfield-ground-a-256x128.png',
+    currentSrc: 'https://tessera.cloudsforge.localtest.me/world-assets/tiles/ashfield-ground-a-256x128.png',
+    naturalWidth: 256,
+    complete: true,
+    loading: 'eager',
+    alt: '',
     ...overrides,
   }
 }
@@ -112,6 +132,196 @@ test('an EMPTY state is not a failure — the market answered with nothing, and 
   // right now" is in the fixture's body text; a suite matching on prose would call this red.
   const findings = checkSurface(healthy(), surface('market'), HANDLE)
   assert.equal(findings.length, 0)
+})
+
+/* ------------------------------------------------------------------ imagery */
+
+test('a page whose pictures all decoded is not a finding', () => {
+  const findings = checkSurface(
+    healthy({ images: [loadedImage(), loadedImage({ src: '/world-assets/avatar/base-a-front-256x512.png' })] }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.deepEqual(findings, [])
+})
+
+test('THE TESSERA MOUNT DEFECT IS RED: the tags are all there and the pictures are not', () => {
+  // The 2026-08-05 audit, as a fixture. `deploy/compose/estate/world-assets/` held a README and
+  // nothing else, so `SET.json` and all 392 sprites 404'd on both networks while every existing
+  // check stayed green — the document answered 200, the app mounted, the page was painted, no
+  // design-system failure state rendered and the surface said its own words.
+  //
+  // THE POINT OF THIS CASE: an assertion that an `<img>` exists passes on this fixture. Every tag
+  // is present, every `src` is spelled correctly, and the reader is looking at broken icons.
+  const findings = checkSurface(
+    healthy({
+      images: [
+        loadedImage({ naturalWidth: 0 }),
+        loadedImage({ src: '/world-assets/avatar/base-a-front-256x512.png', naturalWidth: 0 }),
+      ],
+    }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0]?.check, 'every image on the page loaded')
+  assert.match(findings[0]?.detail ?? '', /2 <img> tag\(s\) the browser could not decode/)
+  assert.match(findings[0]?.detail ?? '', /ashfield-ground-a/)
+})
+
+test('a tag with no src at all is reported SEPARATELY — it was never given a picture', () => {
+  // "Never had an image" and "has one that fails to load" are repaired in different repositories:
+  // the first is a surface nobody wired, the second is a file nobody serves. One finding covering
+  // both sends the reader to the wrong one.
+  const findings = checkSurface(
+    healthy({ images: [loadedImage({ src: '', currentSrc: '', naturalWidth: 0, alt: 'Island' })] }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0]?.check, 'every image has a source')
+  assert.match(findings[0]?.detail ?? '', /no src attribute/)
+  assert.match(findings[0]?.detail ?? '', /alt="Island"/)
+})
+
+test('a lazy image that has not loaded yet is NOT a finding — deferring is what lazy means', () => {
+  // `emberkin`'s dex grid, `market`'s gallery and `foresight`'s market image all set
+  // `loading="lazy"`. Going red on a below-the-fold tag would fail a surface for being fast, and
+  // this tier would be switched off within a week.
+  const findings = checkSurface(
+    healthy({ images: [loadedImage({ naturalWidth: 0, complete: false, loading: 'lazy' })] }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.deepEqual(findings, [])
+})
+
+test('a lazy image the browser FINISHED and could not decode is still red', () => {
+  // The allowance above is bounded by `complete`. A lazy tag the browser has finished with is a
+  // tag the browser tried and failed on, and excusing it would turn the allowance into a way to
+  // hide every broken picture by adding one attribute.
+  const findings = checkSurface(
+    healthy({ images: [loadedImage({ naturalWidth: 0, complete: true, loading: 'lazy' })] }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0]?.check, 'every image on the page loaded')
+})
+
+/* ------------------------------------------------------------------ declared art */
+
+test('THE TESSERA MOUNT DEFECT IS RED THE WAY IT ACTUALLY PRESENTED: no <img> anywhere', () => {
+  // The case above uses `<img>` tags because they make the contrast readable. This one is the
+  // defect as it really was, and it is the reason `SmokeSurface.imagery` exists at all: Tessera
+  // has NO `<img>` tags — `src/render/renderer.ts` draws into a canvas from ImageBitmaps, and
+  // `SpriteCache.fetchOne` swallows its own 404s by design. So `images` is empty, every DOM check
+  // is satisfied, and 392 generated sprites reach nobody.
+  //
+  // Verbatim from `tessera.cloudsforge.online` before the mount was populated on 2026-08-05.
+  const findings = checkSurface(
+    healthy({
+      surfaceKey: 'tessera',
+      url: 'https://tessera.cloudsforge.online/',
+      images: [],
+      requiredImages: [
+        { path: '/world-assets/SET.json', kind: 'receipt', status: 404, naturalWidth: null, parsed: null, error: null },
+        {
+          path: '/world-assets/tiles/ashfield-ground-a-256x128.png',
+          kind: 'image',
+          status: null,
+          naturalWidth: 0,
+          parsed: null,
+          error: null,
+        },
+      ],
+    }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.equal(findings.length, 2)
+  assert.ok(findings.every((f) => f.check === 'the art this product needs is served'))
+  assert.match(findings[0]?.detail ?? '', /answered HTTP 404 for \/world-assets\/SET\.json/)
+  assert.match(findings[0]?.detail ?? '', /unpopulated or unrouted/)
+})
+
+test('declared art the browser produced no picture from is red, whatever the status was', () => {
+  // The failure a status-code check cannot see: an HTML error page served with a 200, a truncated
+  // copy, or a Content-Type that makes nosniff refuse the estate's own picture. All three arrive
+  // as a decoded width of zero, which is why the width is what is asserted on — and why an image
+  // carries NO status here at all. It is resolved through an image element rather than `fetch`
+  // (see `resolveImagery`), so there is no status to be reassured by, only a picture or not.
+  const findings = checkSurface(
+    healthy({
+      requiredImages: [
+        { path: '/art/species/cindercub-256x256.png', kind: 'image', status: null, naturalWidth: 0, parsed: null, error: null },
+      ],
+    }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0]?.check, 'the art this product needs is served')
+  assert.match(findings[0]?.detail ?? '', /the browser produced no picture from it/)
+})
+
+test('a receipt that 200s with a body that is not JSON is red', () => {
+  const findings = checkSurface(
+    healthy({
+      requiredImages: [
+        { path: '/world-assets/SET.json', kind: 'receipt', status: 200, naturalWidth: null, parsed: false, error: null },
+      ],
+    }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.equal(findings.length, 1)
+  assert.match(findings[0]?.detail ?? '', /not readable JSON/)
+})
+
+test('declared art that resolves and decodes produces no finding', () => {
+  const findings = checkSurface(
+    healthy({
+      requiredImages: [
+        { path: '/world-assets/SET.json', kind: 'receipt', status: 200, naturalWidth: null, parsed: true, error: null },
+        {
+          path: '/world-assets/tiles/ashfield-ground-a-256x128.png',
+          kind: 'image',
+          status: null,
+          naturalWidth: 256,
+          parsed: null,
+          error: null,
+        },
+      ],
+    }),
+    surface('market'),
+    HANDLE,
+  )
+  assert.deepEqual(findings, [])
+})
+
+test('EVERY declared image path is on the surface\'s own origin, and none is a wildcard', () => {
+  // The rule `ContractualEmpty` establishes, applied to the other direction. An allowance narrows
+  // what the tier looks at; a declaration widens it — but a declaration naming another host would
+  // let one surface's green vouch for a different one's mount, and a pattern would let a
+  // declaration match a file nobody meant. Both are refused structurally here rather than by
+  // review, because this list will grow.
+  for (const surfaceDef of SMOKE_SURFACES) {
+    for (const image of surfaceDef.imagery ?? []) {
+      assert.ok(
+        image.path.startsWith('/'),
+        `${surfaceDef.key} declares ${image.path}, which is not a path on its own origin`,
+      )
+      assert.ok(
+        !/[*?]/.test(image.path),
+        `${surfaceDef.key} declares ${image.path}, which is a pattern — declare the file`,
+      )
+      assert.ok(
+        image.why.length > 40,
+        `${surfaceDef.key}'s ${image.path} has no reason recorded; say what breaks without it`,
+      )
+    }
+  }
 })
 
 test('THE WORLDS REGISTRY DEFECT IS RED: the frontend calls a host the gateway does not route', () => {
