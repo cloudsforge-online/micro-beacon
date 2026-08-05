@@ -7,7 +7,36 @@
  */
 
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 import { describe, it } from 'node:test'
+
+/**
+ * GENERATED, NOT WRITTEN.
+ *
+ * The literal that used to sit here was `'a-real-looking-break-glass-token-value'` — a hyphenated
+ * sentence describing itself, which is the exact family the estate's own
+ * `estate-only-beacon-breakglass-000000000` belongs to. It cleared the old 24-character floor for
+ * the same reason that placeholder did, which is to say for no reason at all.
+ *
+ * Regenerated per run rather than replaced with a better-looking literal, so a placeholder cannot
+ * creep back in the next time somebody needs a fixture.
+ */
+const TOKEN = randomBytes(48).toString('base64')
+
+/**
+ * THIS FIXTURE CONTAINS HYPHENS ON PURPOSE, AND THAT IS THE MOST IMPORTANT THING ABOUT IT.
+ *
+ * A credential body is base64**url**, so `-` and `_` are in its alphabet. Measured on the running
+ * estates: the mainnet credential is alphanumeric (`cloudsforge-estate-beacon-1`, 2026-08-05,
+ * `cfsc_` + 43) and the testnet one CONTAINS A HYPHEN. So a "secrets have no hyphens" rule — which
+ * is correct for a generated signing key, and which every placeholder this estate wrote would have
+ * failed — passes mainnet and kills testnet at boot, on the one service whose death makes every
+ * other outage invisible.
+ *
+ * Keeping a hyphenated credential here means that mistake fails CI instead of failing one estate in
+ * production. Do not "tidy" the hyphens out of this value.
+ */
+const CREDENTIAL = 'cfsc_TToR-eOeVTDnqhX1-nu6-u7DoCr4MCfa86g4g6kd404'
 
 /**
  * A valid environment, applied to the process BEFORE `./env.ts` is imported.
@@ -19,7 +48,7 @@ const BASE: Record<string, string> = {
   BEACON_DATABASE_URL: 'postgres://beacon:beacon@127.0.0.1:5432/beacon',
   IDENTITY_JWKS_URL: 'http://127.0.0.1:4001/.well-known/jwks.json',
   IDENTITY_ISSUER: 'http://127.0.0.1:4001',
-  BEACON_TOKEN: 'a-real-looking-break-glass-token-value',
+  BEACON_TOKEN: TOKEN,
 }
 for (const [key, value] of Object.entries(BASE)) process.env[key] = value
 
@@ -64,8 +93,112 @@ describe('required variables', () => {
     assert.throws(() => loadEnv({ ...BASE, BEACON_TOKEN: 'changeme' }), /placeholder/)
   })
 
-  it('refuses a short token', () => {
-    assert.throws(() => loadEnv({ ...BASE, BEACON_TOKEN: 'short' }), /at least 24 characters/)
+  /**
+   * **THE VALUE THIS SERVICE IS RUNNING ON TODAY, PINNED AS A FAILURE.**
+   *
+   * `deploy/compose/docker-compose.estate.yml` carries
+   * `BEACON_TOKEN: estate-only-beacon-breakglass-000000000` on two lines as a HARDCODED literal,
+   * and the same string was measured inside `cloudsforge-estate-beacon-1` on 2026-08-05. It is 39
+   * characters, so the 24-character floor this service used to apply could never fail for it —
+   * which is micro-org #142, and it is why the floor is gone.
+   *
+   * Quoted here because it is an already-public defect value with no secrecy left to protect, and
+   * because a test that names the exact string the estate shipped is the only kind that cannot be
+   * satisfied by a rule that happens to catch something else.
+   */
+  it('REFUSES THE VALUE THE ESTATE IS RUNNING, which is the whole of this change', () => {
+    assert.throws(
+      () => loadEnv({ ...BASE, BEACON_TOKEN: 'estate-only-beacon-breakglass-000000000' }),
+      (err: unknown) =>
+        err instanceof EnvError &&
+        /BEACON_TOKEN/.test(err.message) &&
+        /estateonly/.test(err.message) &&
+        // The message names the marker it matched, never the value it matched it in: the fatal
+        // handler writes this to stderr and the collector ships it onwards.
+        !err.message.includes('estate-only-beacon-breakglass-000000000'),
+    )
+  })
+
+  it('refuses a short token, and the message says how short', () => {
+    // This assertion used to demand the message say "at least 24 characters" — the keystroke floor
+    // that let a 39-character placeholder through. Pinning that wording made the test a DEFENCE of
+    // the defective rule: any fix that stopped counting to 24 would fail CI, however much better
+    // the new rule was. What it asserts now is the property that matters.
+    assert.throws(
+      () => loadEnv({ ...BASE, BEACON_TOKEN: 'short' }),
+      (err: unknown) =>
+        err instanceof EnvError && /is 5 characters/.test(err.message) && /at least 16/.test(err.message),
+    )
+  })
+
+  it('refuses a long, well-formed, DEGENERATE token', () => {
+    // Long enough for any keystroke floor and carrying zero bits of entropy, because every
+    // character is the same one. This is the half of the old rule that was wrong even for values
+    // nobody would call a placeholder.
+    assert.throws(
+      () => loadEnv({ ...BASE, BEACON_TOKEN: 'a'.repeat(40) }),
+      (err: unknown) => err instanceof EnvError && /entropy/.test(err.message),
+    )
+  })
+
+  /**
+   * An operator's own value is accepted, and that is deliberate.
+   *
+   * `BEACON_TOKEN` is checked BEFORE the identity bearer so the gate stays readable when identity
+   * is the thing that has broken, which means it is a value a person transcribes during an
+   * incident. It is therefore held to `assertOpaqueSecret` rather than to the estate's
+   * base64-or-hex rule — a guard that refused a working hand-set value would be a guard somebody
+   * removes, and the marker check that catches the real defect above is identical under both rules.
+   */
+  it('accepts a hand-set value whose alphabet the estate does not control', () => {
+    const typed = 'Zq7!vX#4mT$8kW%2nR&6'
+    assert.equal(loadEnv({ ...BASE, BEACON_TOKEN: typed }).token, typed)
+  })
+})
+
+/* ────────────────────────────────────────────────────────────────────────────────────────────────
+ * BEACON_SERVICE_CREDENTIAL — the OTHER kind of secret, and the names do not say which is which.
+ * ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+describe('the service credential', () => {
+  it('is ABSENT by default, and absence is a supported mode rather than a throw', () => {
+    // Compose interpolates `${BEACON_IDENTITY_CREDENTIAL:-}`, so an ungranted deployment hands this
+    // process the empty string. The journeys that need a scoped token are then not declared at all.
+    // Turning that into exit(1) would take down the service that reports every other outage.
+    assert.equal(loadEnv(BASE).serviceCredential, '')
+    assert.equal(loadEnv({ ...BASE, BEACON_SERVICE_CREDENTIAL: '' }).serviceCredential, '')
+    assert.equal(loadEnv({ ...BASE, BEACON_SERVICE_CREDENTIAL: '   ' }).serviceCredential, '')
+  })
+
+  it('accepts a real credential, INCLUDING A HYPHENATED ONE', () => {
+    // The hyphen is the point. See the comment on CREDENTIAL: mainnet's is alphanumeric and
+    // testnet's is not, so a "no hyphens" rule boots one estate and kills the other.
+    assert.equal(loadEnv({ ...BASE, BEACON_SERVICE_CREDENTIAL: CREDENTIAL }).serviceCredential, CREDENTIAL)
+  })
+
+  it('refuses a value that is present and is not a credential', () => {
+    // Absent is a deployment nobody has granted one to. A short or malformed one is a deployment
+    // that BELIEVES it has a credential, and it fails at the exchange with a 401 that reads as
+    // "identity rejected beacon" rather than "nobody set this variable".
+    assert.throws(
+      () => loadEnv({ ...BASE, BEACON_SERVICE_CREDENTIAL: 'cfsc_short' }),
+      (err: unknown) => err instanceof EnvError && /BEACON_SERVICE_CREDENTIAL/.test(err.message),
+    )
+    assert.throws(
+      () => loadEnv({ ...BASE, BEACON_SERVICE_CREDENTIAL: TOKEN }),
+      (err: unknown) => err instanceof EnvError && /cfsc_/.test(err.message),
+    )
+  })
+
+  it('refuses a JWT BY NAME — the ten-minute cliff wearing the fix’s clothes', () => {
+    // `ecosystem.ts` EXCHANGES this value for a short-lived token. An injected 600-second JWT here
+    // looks configured, works for ten minutes, and then answers 401 for ever with nothing re-minting
+    // it. micro-org #197/#222: that is how the settlement container spent a day unhealthy.
+    const jwt = `eyJhbGciOiJSUzI1NiJ9.${randomBytes(64).toString('base64url')}.${randomBytes(64).toString('base64url')}`
+    assert.throws(
+      () => loadEnv({ ...BASE, BEACON_SERVICE_CREDENTIAL: jwt }),
+      (err: unknown) => err instanceof EnvError && /micro-org#197/.test(err.message),
+    )
   })
 })
 

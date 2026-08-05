@@ -29,6 +29,7 @@
  */
 
 import { hostname } from 'node:os'
+import { SecretError, assertOpaqueSecret, assertServiceCredential } from '@cloudsforge/secrets'
 import { TargetsError, parseTargets as parseTargetsPure } from './targets.ts'
 
 /**
@@ -46,17 +47,26 @@ export class EnvError extends Error {
   }
 }
 
-const PLACEHOLDERS = new Set([
-  'changeme',
-  'change-me',
-  'change_me',
-  'placeholder',
-  'secret',
-  'token',
-  'dev-secret',
-  'replace-with-a-real-secret',
-  'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-])
+/**
+ * THE `PLACEHOLDERS` SET THAT USED TO BE HERE IS GONE, AND ITS ABSENCE IS THE FIX.
+ *
+ * It held nine exact strings and was paired with a 24-character floor. Neither could fail for the
+ * value that is in `deploy/compose/docker-compose.estate.yml` on two lines TODAY:
+ * `BEACON_TOKEN: estate-only-beacon-breakglass-000000000` is 39 characters and was on nobody's
+ * list. Measured out of `cloudsforge-estate-beacon-1` on 2026-08-05, so this is not a reading of
+ * the file — it is what the running container holds. Both lines are HARDCODED LITERALS rather than
+ * `${BEACON_TOKEN:-…}` interpolations, so no deploy has ever been able to override them.
+ *
+ * A check that cannot fail is worse than no check, because the absence of an alarm gets read as the
+ * absence of a problem — and this is the release gate. `/metrics` and `/v1/gate` describe the shape
+ * of the estate: which services exist, which are down, which journey is failing, and whether a
+ * release may be promoted.
+ *
+ * A deny-list of exact strings is structurally unable to work: the next placeholder somebody writes
+ * is, by definition, not on it. `@cloudsforge/secrets` asserts the SHAPE of the value instead,
+ * which is the property a placeholder cannot have. It is imported rather than copied so that this
+ * service cannot drift from the other sixteen.
+ */
 
 type Source = Readonly<Record<string, string | undefined>>
 
@@ -66,22 +76,92 @@ function required(source: Source, name: string): string {
   return value
 }
 
-function requiredSecret(source: Source, name: string, minLength = 24): string {
+/**
+ * Re-wrap the shared guard's `SecretError` as this service's `EnvError`.
+ *
+ * `loadEnv` documents a single error class for every configuration failure, and the boot path
+ * catches that one class. The message is preserved verbatim — it already names the variable and the
+ * command that fixes it, and it never contains the value.
+ */
+function asEnvError<T>(run: () => T): T {
+  try {
+    return run()
+  } catch (err) {
+    if (err instanceof SecretError) throw new EnvError(err.message)
+    throw err
+  }
+}
+
+/**
+ * A secret whose ALPHABET THIS ESTATE DOES NOT CONTROL.
+ *
+ * ── WHY `assertOpaqueSecret` AND NOT `assertGeneratedSecret` ───────────────────────────────────
+ *
+ * `assertGeneratedSecret` is the stricter rule and it is the right one for a key the estate MINTS,
+ * because the estate chooses those values with `openssl rand -base64 48` and can therefore demand
+ * the base64 or hex alphabet of them. `BEACON_TOKEN` is not one of those, and the compose file says
+ * so in its own words: "BEACON_TOKEN IS INBOUND BREAK-GLASS, NOT AN OUTBOUND SERVICE TOKEN … a
+ * static shared secret, like `ANALYTICS_TOKEN`, and NOT minted by identity."
+ *
+ * That is not a detail of provenance, it is the property the token exists to have. This service
+ * checks `BEACON_TOKEN` BEFORE the identity bearer precisely so that "when identity is the thing
+ * that has broken, a Beacon that could only be read with an identity token would be a Beacon nobody
+ * can read". A value with that job is one a person transcribes out of a runbook during an incident,
+ * which is the case `@cloudsforge/secrets` documents `assertOpaqueSecret` for by name.
+ *
+ * ── IT REFUSES THE LIVE VALUE ANYWAY, WHICH IS THE ENTIRE POINT ────────────────────────────────
+ *
+ * The two rules differ on the alphabet and agree on everything that matters here. Both normalise
+ * punctuation and case away and then refuse a placeholder MARKER anywhere in the value, so
+ * `estate-only-beacon-breakglass-000000000` flattens to a string containing `estateonly` and is
+ * refused by either. The choice between them buys the operator a hand-set value that works; it does
+ * not buy the defect a way through.
+ *
+ * **CONSEQUENCE, STATED PLAINLY: this service will not boot on either estate until `BEACON_TOKEN`
+ * is set to a real value.** That is the fix, not a side effect of it — see the block above.
+ */
+function requiredOpaqueSecret(source: Source, name: string): string {
   const value = required(source, name)
-  if (PLACEHOLDERS.has(value.toLowerCase())) {
-    throw new EnvError(`${name} is set to a known placeholder — generate a real secret`)
-  }
-  // Length is a proxy for entropy and the only one available here. It is set above the point at
-  // which a human-chosen string is plausible, so a memorable password fails this check too.
-  if (value.length < minLength) {
-    throw new EnvError(`${name} must be at least ${minLength} characters (got ${value.length})`)
-  }
+  asEnvError(() => assertOpaqueSecret(name, value))
   return value
 }
 
 function optional(source: Source, name: string, fallback: string): string {
   const value = source[name]?.trim()
   return value && value.length > 0 ? value : fallback
+}
+
+/**
+ * A SERVICE CREDENTIAL that may be absent, but must be real if present.
+ *
+ * ── ABSENCE IS A SUPPORTED MODE, AND IT STAYS ONE ──────────────────────────────────────────────
+ *
+ * The empty check is AHEAD of the assertion, and it has to be. Compose interpolates
+ * `BEACON_SERVICE_CREDENTIAL: ${BEACON_IDENTITY_CREDENTIAL:-}`, so a deployment that has not been
+ * granted a credential hands this process the EMPTY STRING rather than nothing at all — that is the
+ * supported mode, not a malformed one, and the journeys that need a scoped token are then not
+ * declared rather than declared-and-failing. Turning that into `exit(1)` would take the release
+ * gate itself down, which is the one service whose absence makes every other outage invisible.
+ *
+ * ── WHY NOT `assertOpaqueSecret`, LET ALONE `assertGeneratedSecret` ────────────────────────────
+ *
+ * Because this variable is the OTHER kind, and the compose file had to say so out loud: "the names
+ * do not match … `beacon/src/ecosystem.ts:549` EXCHANGES it at `POST /service-tokens/exchange` for
+ * a `ledger:read` token, so it is the long-lived `cfsc_…` kind". `assertGeneratedSecret` would
+ * refuse every credential this estate has ever minted — the underscore in `cfsc_` disqualifies both
+ * alphabets — and beacon would exit 1 at boot on BOTH networks.
+ *
+ * `assertServiceCredential` also refuses a JWT BY NAME, which is the failure worth catching here:
+ * an injected 600-second token in this variable looks configured, works for ten minutes, and then
+ * answers 401 for ever with nothing re-minting it (micro-org #197/#222). Measured live on
+ * 2026-08-05, `cloudsforge-estate-beacon-1` holds `cfsc_` + 43 characters — a real credential, and
+ * it PASSES.
+ */
+function optionalCredential(source: Source, name: string): string {
+  const value = source[name]?.trim()
+  if (!value) return ''
+  asEnvError(() => assertServiceCredential(name, value))
+  return value
 }
 
 function integer(source: Source, name: string, fallback: number, min: number, max: number): number {
@@ -306,7 +386,7 @@ export function loadEnv(source: Source = process.env, host = ''): Env {
     instanceId: optional(source, 'INSTANCE_ID', host || 'unknown'),
 
     targets: parseTargets(optional(source, 'BEACON_TARGETS', '')),
-    token: requiredSecret(source, 'BEACON_TOKEN'),
+    token: requiredOpaqueSecret(source, 'BEACON_TOKEN'),
 
     probeDeadlineMs,
     journeyDeadlineMs: integer(source, 'BEACON_JOURNEY_DEADLINE_MS', 90_000, 1_000, 900_000),
@@ -330,10 +410,11 @@ export function loadEnv(source: Source = process.env, host = ''): Env {
     publicStatus: boolean(source, 'BEACON_PUBLIC_STATUS', false),
 
     handoffOrigin,
-    // Never logged, never echoed, and deliberately NOT run through `requiredSecret`: it is
-    // optional, and a length floor on an optional value would reject the empty string that means
-    // "this deployment has no credential".
-    serviceCredential: optional(source, 'BEACON_SERVICE_CREDENTIAL', ''),
+    // Never logged, never echoed. Absent stays a SUPPORTED mode — the empty check sits ahead of the
+    // assertion, because compose interpolates `${BEACON_IDENTITY_CREDENTIAL:-}` and an unset
+    // credential therefore arrives as the empty string. What is no longer supported is a value that
+    // is present and is not a credential: see `optionalCredential`.
+    serviceCredential: optionalCredential(source, 'BEACON_SERVICE_CREDENTIAL'),
 
     browserEnabled: boolean(source, 'BEACON_BROWSER_ENABLED', false),
     browserExecutable: optional(source, 'BEACON_BROWSER_EXECUTABLE', ''),
