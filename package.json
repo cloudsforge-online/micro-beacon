@@ -1,13 +1,17 @@
 {
   "name": "@cloudsforge/beacon",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "The release gate. Synthetic probes and user journeys on a leased schedule, incidents with hysteresis and dedupe, SLOs whose error budget is integer arithmetic, conformance runs, Prometheus metrics, and a redacted public status projection that cannot leak a field it was not told about. A release promotes only if this service says so, and an unknown is never a pass.",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
-  "engines": { "node": ">=22" },
-  "bin": { "beacon": "src/cli.ts" },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "beacon": "src/cli.ts"
+  },
   "scripts": {
     "start": "node --import tsx src/index.ts",
     "migrate": "node --import tsx src/migrator.ts",
