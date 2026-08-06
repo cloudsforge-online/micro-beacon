@@ -9,7 +9,7 @@
  * have reached — no journal, no idempotency key, nothing for the deferred balance constraint to
  * have checked — so every assertion downstream would be about a fiction. Posting a balanced
  * double entry through `POST /entries` produces the same state a deposit produces, because it IS
- * the shape a deposit takes (`deploy/scripts/estate-verify.sh:280-291`).
+ * the shape a deposit takes (`deploy/scripts/estate-verify.sh`).
  *
  * So this module registers a real account against identity, mints a real service token, and posts
  * a real balanced entry. The account is disposable and the domain is `.test`, which RFC 2606
@@ -32,7 +32,7 @@
  * ## Why the operator credential is configuration and its absence is a loud skip
  *
  * `POST /service-tokens` is refused to an ordinary account — identity answers 403, and
- * `estate-verify.sh:121-123` records that as the deliberate gap it is. So seeding a balance needs
+ * `estate-verify.sh` records that as the deliberate gap it is. So seeding a balance needs
  * the estate operator's credential, which is configuration and must never be a default. A journey
  * that cannot get one **skips, naming what to set**; it does not fall back to asserting against an
  * empty account, because "the page showed nothing and the ledger holds nothing" is a check that
@@ -129,7 +129,7 @@ export async function fundAccount(
 
   // ── THE REGISTRATION LIMITER IS REAL, AND WAITING FOR IT IS NOT WORKING AROUND IT ────────────
   //
-  // identity caps `/auth/register` at five per window (`identity/src/server.ts:421`), taken at
+  // identity caps `/auth/register` at five per window (`identity/src/server.ts`), taken at
   // dispatch so a refusal costs what a success does. That is a deliberate control and this must
   // not defeat it — but a shard of six money journeys each seeding one account WILL hit it, and a
   // journey that reported the product broken because its own fixture was throttled would be the
@@ -165,7 +165,7 @@ export async function fundAccount(
   const ledger: LedgerAccess = {
     base: ctx.target('ledger'),
     // Minted per journey rather than shared. identity issues service tokens with a 600-second TTL
-    // and nothing re-mints one (`identity/src/tokens.ts:28`), which is doc 22 §4.1's ten-minute
+    // and nothing re-mints one (`identity/src/tokens.ts`), which is doc 22 §4.1's ten-minute
     // cliff: a shard running eight minutes would hand its last journey an expired credential and
     // report the product broken.
     token: await mintServiceToken(identity, operatorToken, 'wallet', ['ledger:read', 'ledger:post']),

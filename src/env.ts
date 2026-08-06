@@ -10,7 +10,7 @@
  *
  * The service this supersedes carries one environment variable per probed address —
  * `BEACON_NIMBUS_URL`, `BEACON_GAME_URL`, `BEACON_PAY_URL`, … nineteen of them, each with a
- * hardcoded compose-network default (`infra/beacon/src/env.js:100-116`). Two costs, both paid:
+ * hardcoded compose-network default (`infra/beacon/src/env.js`). Two costs, both paid:
  * adding a service to the estate means editing the monitor's source, and every one of those
  * defaults is a container name that is right in exactly one deployment. `MAP.md` §4 in that repo
  * is the record of the same mistake being made three times.
@@ -146,7 +146,7 @@ function optional(source: Source, name: string, fallback: string): string {
  * ── WHY NOT `assertOpaqueSecret`, LET ALONE `assertGeneratedSecret` ────────────────────────────
  *
  * Because this variable is the OTHER kind, and the compose file had to say so out loud: "the names
- * do not match … `beacon/src/ecosystem.ts:549` EXCHANGES it at `POST /service-tokens/exchange` for
+ * do not match … `beacon/src/ecosystem.ts` EXCHANGES it at `POST /service-tokens/exchange` for
  * a `ledger:read` token, so it is the long-lived `cfsc_…` kind". `assertGeneratedSecret` would
  * refuse every credential this estate has ever minted — the underscore in `cfsc_` disqualifies both
  * alphabets — and beacon would exit 1 at boot on BOTH networks.
@@ -220,17 +220,17 @@ export interface Env {
    * The credential Prometheus presents in `x-beacon-token`.
    *
    * **AD-20 says adopting a scraper costs "a scrape config rather than a rewrite". It costs a
-   * scrape config AND THIS**, and 02-target-architecture.md:509-513 records the correction:
+   * scrape config AND THIS**, and 02-target-architecture.md records the correction:
    * "Scraping Beacon costs a credential, not just a scrape config … Verified — an unauthenticated
    * scrape returns 401 and the target reads DOWN." `/metrics` describes the shape of the estate —
    * which services exist, which are down, which journey is failing — and an open one hands that to
-   * anyone who can reach the port. `deploy/prometheus/prometheus.yml:90-97` already carries the
+   * anyone who can reach the port. `deploy/prometheus/prometheus.yml` already carries the
    * matching `http_headers: files:` block, and `BeaconScrapeFailing` is the alert that fires when
    * this is unset.
    *
    * The name is `BEACON_TOKEN` because that is the name the built deploy already reads
    * (`deploy/.env.example:19-20`). Required here, not optional: the frozen service defaults it to
-   * `''` (`infra/beacon/src/env.js:85`), which is exactly why the estate ships a scrape that 401s.
+   * `''` (`infra/beacon/src/env.js`), which is exactly why the estate ships a scrape that 401s.
    * A credential whose absence is a supported mode is a credential nobody notices is absent.
    */
   readonly token: string
@@ -261,8 +261,8 @@ export interface Env {
   /**
    * How many consecutive green journey runs a release must show.
    *
-   * Three, from 13-operational-model.md:150 — "must pass the full journey suite three consecutive
-   * times before its manifest is promoted" — and 17-definition-of-done.md:145. One green run after
+   * Three, from 13-operational-model.md — "must pass the full journey suite three consecutive
+   * times before its manifest is promoted" — and 17-definition-of-done.md. One green run after
    * a red one is a flake that happened to land the right way up; three is a claim.
    */
   readonly gateConsecutiveGreen: number

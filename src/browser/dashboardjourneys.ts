@@ -291,7 +291,7 @@ const onePortfolio: Implementation = (config, scenario, operator) =>
           pricedAt?: unknown
         }
         // `GET /v1/portfolio` answers `{ portfolio: <tile> }` — a single key with the tile beneath
-        // it, not the tile at the top level (hub-api/src/server.ts:338). Reading it the other way
+        // it, not the tile at the top level (hub-api/src/server.ts). Reading it the other way
         // round would produce `undefined` and `money()` would refuse it by name rather than
         // silently comparing two zeros.
         const fromRoute = (standalone['portfolio'] as Tile).data as {
@@ -399,14 +399,14 @@ const activityAppends: Implementation = (config, scenario, operator) =>
     surface: 'hub',
     critical: scenario.gate,
     async verify(ctx, page, collected, base) {
-      // `hub-web/src/lib/hub.ts:363` — the page size the bundle asks for. Named here so the fixture
+      // `hub-web/src/lib/hub.ts` — the page size the bundle asks for. Named here so the fixture
       // is "more than one page" rather than "thirty, probably enough".
       const PAGE_SIZE = 25
 
       // ── THIS JOURNEY BUILDS NO FIXTURE, AND THE REASON IS A REAL CEILING ──────────────────
       //
       // The first draft signed in twenty-nine times to manufacture more than one page of activity.
-      // identity caps `/auth/login` at ten per window (`identity/src/server.ts:422`), taken at
+      // identity caps `/auth/login` at ten per window (`identity/src/server.ts`), taken at
       // dispatch so a refusal costs what a success does — a deliberate control, and one this must
       // not defeat. There is no other route that writes an activity record for a fresh account:
       // `micro-activity` is fed by events and posting a ledger entry produces none.

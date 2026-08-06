@@ -123,7 +123,7 @@ export interface Scenario {
  *     the account menu.
  *
  *   * EXCHANGE_ROUTE said the shared UI posts to `${nimbus}/auth/exchange` while identity serves
- *     `/auth/handoff/redeem`. The UI was corrected — `ui/packages/ui/src/auth.test.ts:9-14` records
+ *     `/auth/handoff/redeem`. The UI was corrected — `ui/packages/ui/src/auth.test.ts` records
  *     the address that actually shipped and the correction — and `deploy/scripts/estate-verify.sh`
  *     drives the whole hand-off through the gateway: minted at Hub for Market, redeemed from
  *     Market's origin, refused from a foreign one.
@@ -420,7 +420,7 @@ export const T3_SCENARIOS: readonly Scenario[] = [
    *
    *   1. **No frontend repository in this estate has a browser.** §1 records it and it is still
    *      true — every `*-web/package.json` runs `node --test` over stubs, and `hub-web/test/
-   *      browser-stubs.ts:1-9` states the position: "There is no DOM in this suite on purpose."
+   *      browser-stubs.ts` states the position: "There is no DOM in this suite on purpose."
    *      A T2 row placed there is a row nobody runs.
    *   2. **These four are only worth anything against a live chain.** Foresight's whole design is
    *      that the page renders a MIRROR and the contract is the record — so "the page showed 0.3

@@ -16,7 +16,7 @@
  *
  * ── CITED BY NAME RATHER THAN BY LINE NUMBER, DELIBERATELY ─────────────────────────────────────
  *
- * That citation said `browser.ts:342` and the line had moved to 419: the helper was renamed to
+ * That citation said `browser.ts` and the line had moved to 419: the helper was renamed to
  * `renderOnlyWithStubbedNetwork` across six repositories and given a long header, and the number
  * rotted in silence. It was, as far as anyone could find, the only line-numbered citation into
  * that file anywhere in the estate, and beacon has no citations test — so nothing would have
@@ -362,8 +362,8 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
      *
      * Transcribed from `status-web/src/lib/degrade.ts`'s `headlineFor`, which returns exactly
      * these four for the four public states and `We cannot currently determine status.` for
-     * `unknown`. They are pinned on that side too — `status-web/test/degrade.test.ts:140` and
-     * `:164` and `:169-170` assert each one — so this list going stale is a red test in the
+     * `unknown`. They are pinned on that side too — `status-web/test/degrade.test.ts` and
+     * and assert each one — so this list going stale is a red test in the
      * repository that owns the words, rather than a check here that quietly stops matching.
      *
      * `unknown` is absent, and that absence IS the check: it is the one outcome that means the

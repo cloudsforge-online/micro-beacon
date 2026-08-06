@@ -6,7 +6,7 @@
  *
  *   1. A slow migration would stall every service that waits on this one's health.
  *   2. Two replicas booting together race on `pg_type`, one raises 23505 and crash-loops — which
- *      is exactly what the service this supersedes does, because `infra/beacon/src/db.js:52` runs
+ *      is exactly what the service this supersedes does, because `infra/beacon/src/db.js` runs
  *      its whole DDL block on every boot with no lock and no version table.
  *   3. Migrating from inside the service means the service decides when the schema changes, so a
  *      rollback of the image is not a rollback of the database.

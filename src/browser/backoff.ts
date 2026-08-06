@@ -11,7 +11,7 @@
  *
  * The browser tier's fixtures need to wait, for a reason that fits that distinction exactly:
  * identity rate-limits `/auth/register` to five per window and `/auth/login` to ten
- * (`identity/src/server.ts:421-422`), taken at dispatch so a refusal costs what a success does. A
+ * (`identity/src/server.ts`), taken at dispatch so a refusal costs what a success does. A
  * shard of six money journeys reaches both. Honouring the `retry-after` the service ITSELF names is
  * a harness waiting its turn; the alternative is a harness that reports the product broken because
  * it was throttled.

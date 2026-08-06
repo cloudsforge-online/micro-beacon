@@ -158,7 +158,7 @@ export function remainingRatio(budget: ErrorBudget): number {
 /**
  * Burn rate in milli-units: `1_000` is 1.0x, `14_400` is the 1-hour paging threshold.
  *
- * The multi-window pair from 13-operational-model.md:449 — 14.4x over 1h pages (2% of a 28-day
+ * The multi-window pair from 13-operational-model.md — 14.4x over 1h pages (2% of a 28-day
  * budget in an hour), 6x over 6h tickets. A single window cannot serve both: a short one pages on
  * every blip, a long one fires after the budget is already gone.
  */
@@ -263,7 +263,7 @@ export async function allBudgets(sql: Sql, now: Date = new Date()): Promise<read
 }
 
 /**
- * The budget policy of 13-operational-model.md:441-446, as a value rather than as a paragraph.
+ * The budget policy of 13-operational-model.md, as a value rather than as a paragraph.
  *
  * 50% consumed is a ticket; 75% reprioritises reliability work above features; **100% is a change
  * freeze on that service**, which is the line the gate enforces.

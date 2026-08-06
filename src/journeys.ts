@@ -9,8 +9,8 @@
  *
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  * **THE THREE RULES ARE LOAD-BEARING AND ARE PORTED FORWARD UNCHANGED.**
- * 13-operational-model.md:158-161 names them as things that must not be relaxed, and the frozen
- * harness (`infra/beacon/src/runner.js:8-27`) already gets all three right.
+ * 13-operational-model.md names them as things that must not be relaxed, and the frozen
+ * harness (`infra/beacon/src/runner.js`) already gets all three right.
  *
  *   1. **A failed assertion and a thrown error are different outcomes.** An assertion failure is
  *      `fail` — the product is broken. Anything else thrown is `error` — Beacon is broken.
@@ -27,7 +27,7 @@
  *      overwriting the real result.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
- * What is NOT ported: the frozen scheduler. `infra/beacon/src/schedule.js:64-92` is a
+ * What is NOT ported: the frozen scheduler. `infra/beacon/src/schedule.js` is a
  * `setTimeout`-plus-`setInterval` fan-out over a module-scope queue, which means two replicas run
  * every journey twice — twice the money moved, twice the rows left behind, and a synthetic account
  * whose balance two journeys are changing underneath each other. Scheduling here is a leased job;
@@ -114,7 +114,7 @@ export interface JourneyDefinition {
   readonly service: string
   /**
    * One of the critical-path set: register, sign in, SSO handoff, deposit, convert, spend,
-   * withdraw, mint deploy, market purchase (13-operational-model.md:435). A critical journey that
+   * withdraw, mint deploy, market purchase (13-operational-model.md). A critical journey that
    * is not green refuses a release on its own.
    */
   readonly critical: boolean
@@ -352,7 +352,7 @@ export async function listRegistered(sql: Sql): Promise<readonly RegisteredJourn
 /**
  * Mute a journey. Requires a reason and an owner, and the database enforces both.
  *
- * 17-definition-of-done.md:256 — "A muted journey is not a passing journey; it is an unmeasured
+ * 17-definition-of-done.md — "A muted journey is not a passing journey; it is an unmeasured
  * one." The gate counts muted journeys and refuses while any exist, so this is a way of saying
  * "we are not shipping until somebody looks at this", never a way of making the board green.
  */
@@ -456,7 +456,7 @@ export async function recentRuns(
 export function journeyStatusValue(status: JourneyStatus): number {
   if (status === 'pass') return 1
   // 0.5 EXACTLY so that `beacon_journey_status == bool 1` in
-  // deploy/prometheus/rules/slo.yaml:138 distinguishes a skip from a pass. Emitting 1 for a skip
+  // deploy/prometheus/rules/slo.yaml distinguishes a skip from a pass. Emitting 1 for a skip
   // would make an unrun journey indistinguishable from a passing one on every dashboard in the
   // estate, which is rule 2 defeated by a rendering decision.
   if (status === 'skip') return 0.5

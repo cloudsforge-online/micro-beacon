@@ -4,8 +4,8 @@
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  * This is the test that justifies replacing the frozen service's schedule wholesale.
  *
- * `infra/beacon/src/probe.js:98` arms a `setInterval` and guards overlap with a module-scope
- * boolean at `:22`. Both are per-process. Two replicas therefore probe every target twice, write
+ * `infra/beacon/src/probe.js` arms a `setInterval` and guards overlap with a module-scope
+ * boolean. Both are per-process. Two replicas therefore probe every target twice, write
  * two check rows per cycle, and inflate the denominator of every uptime figure — and if one of the
  * journeys moves money, they move it twice.
  *

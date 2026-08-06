@@ -18,7 +18,7 @@
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
  * `playwright-core`, not `playwright`. The frozen repository already recorded the reason
- * (`stack/infra/beacon/src/browser.js:9-11`): the full package downloads its own browser build at
+ * (`stack/infra/beacon/src/browser.js`): the full package downloads its own browser build at
  * install time and takes the image from roughly 200MB to 1.5GB, while the core package is the same
  * driver API against a Chromium the image already has. Both the import and the binary are
  * optional — if either is missing, browser journeys skip with that reason rather than failing,
@@ -336,8 +336,8 @@ export function countsAsFailure(url: string, failure: string): boolean {
  *   1. **micro-lantern is not in `deploy/compose/docker-compose.estate.yml` at all** — 22 domain
  *      services are, and it is not one of them — so `lantern.<apex>` has no router and no CORS
  *      allowance.
- *   2. **The two sides do not agree on the path.** `hub-web/src/lib/obs.ts:51` posts to
- *      `/ingest/browser`; `lantern/src/server.ts:333` defines `POST /ingest/client` and
+ *   2. **The two sides do not agree on the path.** `hub-web/src/lib/obs.ts` posts to
+ *      `/ingest/browser`; `lantern/src/server.ts` defines `POST /ingest/client` and
  *      `OPTIONS /ingest/client`. Deploying Lantern would turn `ERR_FAILED` into a 404 and change
  *      nothing else. It is the same class of defect doc 22 §8.1 recorded for `/auth/exchange`
  *      against `/auth/handoff/redeem`, found the same way — by driving it.

@@ -152,7 +152,7 @@ export interface SurfaceJourneyOptions {
 /**
  * The shape every browser journey shares: load it, prove it mounted, then assert the scenario.
  *
- * Carried forward from `stack/infra/beacon/src/journeys/web.js:19`, which is the design doc 22
+ * Carried forward from `stack/infra/beacon/src/journeys/web.js`, which is the design doc 22
  * §2.3 says is being re-adopted rather than invented. The two assertions in `the application
  * boots` are the whole reason a browser is here at all:
  *
@@ -221,7 +221,7 @@ export function surfaceJourney(options: SurfaceJourneyOptions): JourneyDefinitio
  *
  * A money journey has to put a balance on an account before it can assert anything about one,
  * and identity refuses `POST /service-tokens` to an ordinary account (403) — which
- * `deploy/scripts/estate-verify.sh:121-123` records as the deliberate gap it is. So seeding needs
+ * `deploy/scripts/estate-verify.sh` records as the deliberate gap it is. So seeding needs
  * a credential that is configuration, never a default.
  *
  * `null` is the ordinary case and is handled by SKIPPING with the variable named, not by falling
@@ -321,7 +321,7 @@ const registerAndLand: Implementation = (config, scenario) =>
 
       await ctx.step('fill the registration form the estate serves', async () => {
         // By NAME, which is the attribute hub-web's own inputs carry
-        // (hub-web/src/pages/account.tsx:434,455,479) and the one a form post would use. A CSS
+        // (hub-web/src/pages/account.tsx,455,479) and the one a form post would use. A CSS
         // class or a nth-child would be a selector that breaks on a restyle and reports it as an
         // outage.
         await page.fill('input[name=email]', who.email)
@@ -362,7 +362,7 @@ const registerAndLand: Implementation = (config, scenario) =>
  *
  * A refusal scenario, so `ownedBy` names identity's own test and this asserts only the SENTENCE the
  * user is shown. The second half is the part with a cost attached:
- * `hub-web/src/pages/account.tsx:410-413` records it — "a form that clears on a taken handle is the
+ * `hub-web/src/pages/account.tsx` records it — "a form that clears on a taken handle is the
  * failure BJ-ACC-02 exists to catch: the user retypes an address and a password they had right, to
  * fix one word."
  *
@@ -511,7 +511,7 @@ const deepLinkSignIn: Implementation = (config, scenario) =>
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  * **THE FIRST VERSION OF THIS READ `a[href]` AND WOULD HAVE ASSERTED THAT GITHUB.COM ANSWERS 200.**
  *
- * `ProductSwitcher` renders its entries INSIDE `{open && (…)}` (ui/packages/ui/src/index.tsx:677),
+ * `ProductSwitcher` renders its entries INSIDE `{open && (…)}` (ui/packages/ui/src/index.tsx),
  * so on a page nobody has clicked there is no switcher in the DOM at all. Reading every anchor
  * instead therefore did two wrong things at once: it missed the thing the scenario is named after,
  * and it swept up whatever else the page links to — driven against `network.<apex>`, that set is

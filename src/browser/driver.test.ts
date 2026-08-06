@@ -110,7 +110,7 @@ test('THE OBSERVABILITY SINK IS PARTITIONED, REPORTED, AND NEVER FATAL ON ITS OW
   // Driving hub.<apex>/account/register against the running estate produced exactly this on all
   // three flows: `net::ERR_FAILED https://lantern.<apex>/ingest/browser`. Two real causes, neither
   // this repository's — lantern is not in the estate compose file at all, and the two sides
-  // disagree on the path (obs.ts:51 posts /ingest/browser, lantern/src/server.ts:333 serves
+  // disagree on the path (obs.ts posts /ingest/browser, lantern/src/server.ts serves
   // /ingest/client). A journey that goes red because the ERROR REPORTER could not report is the
   // outage amplifier obs.ts's own rule 2 forbids, one layer up.
   const beaconFailure = {

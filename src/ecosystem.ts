@@ -597,7 +597,7 @@ export const ECOSYSTEM_TRIAL_BALANCE: JourneyDefinition = {
         // body of a `POST /service-tokens/exchange` call. Beacon is only ever seen through the
         // second — it builds no `HttpClient`, so `presentsCredential()` is false for this file,
         // and it has no entry in `compose/estate/grant-gaps.json` precisely because this literal
-        // is readable (`deploy/scripts/derive-grants.mjs:414-421`). Lifting it to
+        // is readable (`deploy/scripts/derive-grants.mjs`). Lifting it to
         // `scopes: LEDGER_SCOPES` would match neither seam: the file would contribute nothing,
         // beacon would silently lose `ledger:read`, and the estate build would fail it as an
         // undeclared gap. A named constant needs micro-deploy to resolve an identifier at this

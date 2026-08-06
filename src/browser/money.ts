@@ -13,7 +13,7 @@
  *
  *   * **The ledger**, through `GET /accounts/:subject/balances` and `GET /trial-balance` — the
  *     service of record for every internal balance, and the one whose schema carries the deferred
- *     constraint that refuses an unbalanced journal. `deploy/scripts/estate-verify.sh:252-345`
+ *     constraint that refuses an unbalanced journal. `deploy/scripts/estate-verify.sh`
  *     already drives both routes with a service token; this is the same seam from the browser tier.
  *   * **The chain**, through `eth_call` — for Foresight, where the pool is in the contract and the
  *     mirror is explicitly allowed to be wrong. `foresight-web/src/lib/abi.ts` says so in as many
@@ -151,11 +151,11 @@ export interface Identity {
 }
 
 /**
- * Mint a service token, exactly as `estate-verify.sh:266-268` does.
+ * Mint a service token, exactly as `estate-verify.sh` does.
  *
  * An ordinary account cannot do this and identity answers 403 — which is the gap that script
  * already records. The credential used here is the estate operator's, supplied by configuration,
- * and the token it returns lives 600 seconds (`identity/src/tokens.ts:28`). That TTL is doc 22
+ * and the token it returns lives 600 seconds (`identity/src/tokens.ts`). That TTL is doc 22
  * §4.1's ten-minute cliff, and it is why every journey mints its own rather than sharing one: a
  * shard that runs eight minutes would otherwise hand its last journey an expired credential and
  * report the product broken.
@@ -193,7 +193,7 @@ export async function signInForToken(
 ): Promise<string> {
   // ── THE LOGIN LIMITER IS REAL, AND WAITING FOR IT IS NOT DEFEATING IT ────────────────────────
   //
-  // identity caps `/auth/login` at ten per window (`identity/src/server.ts:422`), taken at dispatch
+  // identity caps `/auth/login` at ten per window (`identity/src/server.ts`), taken at dispatch
   // so a refusal costs what a success does. A shard of six money journeys signs the operator in
   // once each to mint a service token, and will reach it. Honouring the `retry-after` the service
   // itself names — a bounded number of times, and still an error when exhausted — is the difference
@@ -356,7 +356,7 @@ export async function reverseEntry(
       method: 'POST',
       headers: { authorization: `Bearer ${access.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
-        // Bound to the authenticated principal by `ledger/src/server.ts:682` — `attribute()` now
+        // Bound to the authenticated principal by `ledger/src/server.ts` — `attribute()` now
         // refuses a posting whose claimed service is not the one the token was minted for, so
         // these two are checked rather than believed.
         originatingService: 'wallet',
@@ -434,7 +434,7 @@ export function encodeCall(signature: string, args: readonly AbiArg[] = []): str
  * `null` rather than `0n`, and this is the whole reason the file says what it says about `bigint`.
  * An `eth_call` against a syncing node, an address holding no code, or a chain the node has since
  * dropped all answer `0x` — and `0x` decoded as `0n` is a confident zero where the truth is "not
- * known". `foresight-web/src/lib/abi.ts:88-95` makes the same choice for the same reason.
+ * known". `foresight-web/src/lib/abi.ts` makes the same choice for the same reason.
  */
 export function decodeUintAt(data: unknown, index = 0): bigint | null {
   if (typeof data !== 'string' || !data.startsWith('0x')) return null
@@ -536,7 +536,7 @@ export async function contractStatus(
  * rebuilt, and a journey that skips when it is unset is a journey that skips for ever in CI.
  *
  * `Staked(address indexed staker, uint8 indexed outcome, uint256 amount, uint256 poolYes,
- * uint256 poolNo)` — `ForesightMarket.sol:139`. `staker` is INDEXED, so it is topic 1, and the
+ * uint256 poolNo)` — `ForesightMarket.sol`. `staker` is INDEXED, so it is topic 1, and the
  * chain will name its own stakers to anybody who asks. The signature is hashed rather than
  * memorised for `keccak.ts`'s reason.
  * ══════════════════════════════════════════════════════════════════════════════════════════════

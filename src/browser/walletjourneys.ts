@@ -489,7 +489,7 @@ const sendDestinationIsConfirmed: Implementation = (config, scenario, operator) 
  * BJ-WAL-09 — double-click Confirm, and exactly one request leaves the browser.
  *
  * Doc 22: "exactly one withdrawal request leaves the browser. The key is minted when the intent is
- * formed, not per fetch — `market-web/src/lib/idempotency.ts:12-16` already states the rule and is
+ * formed, not per fetch — `market-web/src/lib/idempotency.ts` already states the rule and is
  * the model."
  *
  * ── HOW THE TWO CLICKS ARE MADE, AND WHY IT MATTERS ────────────────────────────────────────────

@@ -5,7 +5,7 @@
  *
  * Not a convenience: `resetBeacon` truncates every table this service owns, and requiring "test"
  * in the name is the difference between a red build and an emptied environment. This service holds
- * `check_rollups`, which 13-operational-model.md:683 names as "the only irreplaceable part" of the
+ * `check_rollups`, which 13-operational-model.md names as "the only irreplaceable part" of the
  * observation plane's backup story — a 400-day uptime history that cannot be recomputed from
  * anything, because the raw checks behind it were pruned a year ago.
  *
@@ -116,7 +116,7 @@ export async function seedJourney(
   await syncRegistry(db(sql), [definition])
 }
 
-/** 99.5% — the Tier-2 default from 13-operational-model.md:429. */
+/** 99.5% — the Tier-2 default from 13-operational-model.md. */
 export const TIER2_PPM = 995_000n
 /** 99.95% — Tier 1, the money services. Twenty-one minutes over 28 days. */
 export const TIER1_PPM = 999_500n

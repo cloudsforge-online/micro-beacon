@@ -18,7 +18,7 @@
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
  * The `up` / `degraded` / `down` vocabulary is carried forward unchanged from the frozen service
- * (`infra/beacon/src/metrics.js:90`) because Grafana's dashboards and the recording rules in
+ * (`infra/beacon/src/metrics.js`) because Grafana's dashboards and the recording rules in
  * `deploy/prometheus/rules/slo.yaml` are already written against `beacon_target_up` with 1, 0.5
  * and 0. Renaming a state would silently empty a panel rather than break a build.
  */
@@ -234,7 +234,7 @@ export interface Thresholds {
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  * **THE COUNTERS AND THE REPORTED STATE MOVE IN ONE STATEMENT.**
  *
- * The service this supersedes keeps them in a module-scope `Map` (`infra/beacon/src/store.js:17`)
+ * The service this supersedes keeps them in a module-scope `Map` (`infra/beacon/src/store.js`)
  * and does read-modify-write in JavaScript. That is correct for exactly one replica. For two it is
  * two half-counts that each reach `failThreshold` on their own schedule or never — and the flap it
  * produces is indistinguishable from a real one.

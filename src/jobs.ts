@@ -8,17 +8,17 @@
  * **THIS IS THE FILE THAT REPLACES THE FROZEN SERVICE'S TIMERS, AND IT IS THE POINT OF THE PORT.**
  *
  * The service this supersedes schedules everything with `setInterval` in module scope:
- * `probe.js:98` fires a whole probe cycle every thirty seconds, `schedule.js:77` arms one interval
- * per journey, `store.js:221` flushes the write buffer every two seconds. Each of those is
+ * `probe.js` fires a whole probe cycle every thirty seconds, `schedule.js` arms one interval
+ * per journey, `store.js` flushes the write buffer every two seconds. Each of those is
  * per-process state, and every one of them means **two replicas do the work twice**:
  *
  *   * Twice the load on a target that is already too slow to answer — the monitor becoming the
- *     incident, which `schedule.js:12-15` explicitly warns about and then does not prevent.
+ *     incident, which `schedule.js` explicitly warns about and then does not prevent.
  *   * Two journeys moving one synthetic account's balance underneath each other.
  *   * Two rows per check, so every uptime percentage is computed from a doubled denominator that
  *     halves when a replica restarts.
  *
- * The frozen service's own overlap guard (`probe.js:22`, a module-scope `running` boolean) is the
+ * The frozen service's own overlap guard (`probe.js`, a module-scope `running` boolean) is the
  * tell: it is exactly the right idea implemented in exactly the place that cannot work across
  * processes. The lease is that idea in the one place that can.
  *
@@ -90,7 +90,7 @@ export const RECURRING: readonly Recurring[] = Object.freeze([
   // Five seconds. It must be finer than the shortest probe interval or a 30-second probe drifts
   // to 30-plus-sync. One indexed query; it is cheaper than the drift it prevents.
   { kind: SYNC_KIND, key: 'global', everyMs: 5_000 },
-  // Every five minutes, as 13-operational-model.md:165 specifies for SLO evaluation.
+  // Every five minutes, as 13-operational-model.md specifies for SLO evaluation.
   { kind: SLO_KIND, key: 'global', everyMs: 300_000 },
   { kind: ROLLUP_KIND, key: 'global', everyMs: 300_000 },
   { kind: PRUNE_KIND, key: 'global', everyMs: 3_600_000 },
@@ -336,7 +336,7 @@ export function registerHandlers(runner: JobRunner, deps: JobDeps): JobRunner {
 
     await recordRun(deps.sql, run)
 
-    // **A SKIP COUNTS AGAINST THE OBJECTIVE.** 13-operational-model.md:437 — "99% of scheduled
+    // **A SKIP COUNTS AGAINST THE OBJECTIVE.** 13-operational-model.md — "99% of scheduled
     // runs pass. A skip counts against it, because a skip is not a pass." `good` is 1 only for
     // `pass`; fail, error and skip are all 0.
     await recordObservation(
@@ -475,7 +475,7 @@ export function registerHandlers(runner: JobRunner, deps: JobDeps): JobRunner {
     // Raw checks go first and go soonest: they are the bulk of the data and answer no question
     // anyone asks a fortnight later. `check_rollups` outlives them by more than a year, and IT is
     // what AD-20's 400-day figure actually describes — Prometheus cannot downsample and never
-    // could, which is recorded in 02-target-architecture.md:501-507.
+    // could, which is recorded in 02-target-architecture.md.
     await deps.sql`delete from checks where ts < now() - make_interval(days => ${deps.retention.checkDays})`
     await deps.sql`delete from check_rollups where bucket < now() - make_interval(days => ${deps.retention.rollupDays})`
     await deps.sql`delete from journey_runs where started_at < now() - make_interval(days => ${deps.retention.runDays})`

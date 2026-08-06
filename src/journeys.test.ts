@@ -1,7 +1,7 @@
 /**
  * The journey harness.
  *
- * The three rules of 13-operational-model.md:158-161, each asserted rather than described:
+ * The three rules of 13-operational-model.md, each asserted rather than described:
  * an assertion failure is `fail` and any other throw is `error`; a skip is never green; teardown
  * runs on every exit path.
  */

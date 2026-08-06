@@ -147,35 +147,35 @@ port that does not say what it rejected is a rewrite pretending to be a port.
 
 | What | From | Why it was right |
 | --- | --- | --- |
-| **Hysteresis** — an incident is a state transition that survived `failThreshold`, not a failed check | `store.js:115-130`, `incidents.js:1-3` | The difference between a monitor you read and a monitor you mute. Three failures at a 30s cadence is 90 seconds to detection: fast enough to matter, slow enough to be true. Recovery has its own threshold, so a flapping target produces no paired open/close stream. |
-| **The journey harness's three rules** | `runner.js:8-27` | An assertion failure is `fail` (the product is broken) and any other throw is `error` (Beacon is broken); not-run is not passed; teardown runs on every exit path. 13-operational-model.md:158 names these as load-bearing, and they are. |
-| **A skip is never green, and emits 0.5** | `metrics.js:145` | `deploy/prometheus/rules/slo.yaml:138` already depends on the 0.5 to distinguish a skip from a pass. |
-| **The partial unique index on open incidents** | `db.js:150-151` | "Two probe cycles overlapping is exactly how you get a duplicate and exactly the case nobody tests." Correct then and load-bearing now. |
-| **`up` / `degraded` / `down` and the 1 / 0.5 / 0 encoding** | `metrics.js:90` | Grafana's dashboards are already written against it. Renaming a state empties a panel silently. |
-| **A monitor must not become the incident** | `schedule.js:12-15` | The idea survives; the implementation does not — see below. |
-| **Rollups outlive raw checks by more than a year** | `db.js:78-80`, `env.js:50` | `BEACON_ROLLUP_RETENTION_DAYS=400` is the figure AD-20's 400-day line actually describes. |
+| **Hysteresis** — an incident is a state transition that survived `failThreshold`, not a failed check | `store.js`, `incidents.js` | The difference between a monitor you read and a monitor you mute. Three failures at a 30s cadence is 90 seconds to detection: fast enough to matter, slow enough to be true. Recovery has its own threshold, so a flapping target produces no paired open/close stream. |
+| **The journey harness's three rules** | `runner.js` | An assertion failure is `fail` (the product is broken) and any other throw is `error` (Beacon is broken); not-run is not passed; teardown runs on every exit path. 13-operational-model.md names these as load-bearing, and they are. |
+| **A skip is never green, and emits 0.5** | `metrics.js` | `deploy/prometheus/rules/slo.yaml` already depends on the 0.5 to distinguish a skip from a pass. |
+| **The partial unique index on open incidents** | `db.js` | "Two probe cycles overlapping is exactly how you get a duplicate and exactly the case nobody tests." Correct then and load-bearing now. |
+| **`up` / `degraded` / `down` and the 1 / 0.5 / 0 encoding** | `metrics.js` | Grafana's dashboards are already written against it. Renaming a state empties a panel silently. |
+| **A monitor must not become the incident** | `schedule.js` | The idea survives; the implementation does not — see below. |
+| **Rollups outlive raw checks by more than a year** | `db.js`, `env.js` | `BEACON_ROLLUP_RETENTION_DAYS=400` is the figure AD-20's 400-day line actually describes. |
 
 ### Dropped, and why
 
 | What | From | Why it could not come |
 | --- | --- | --- |
-| **The entire schedule** — `setInterval` for probes, one per journey, one for the write buffer | `probe.js:98`, `schedule.js:77`, `store.js:221` | Per-process. Two replicas probe everything twice, write two check rows per cycle, halve every uptime denominator when one restarts, and move a synthetic account's balance underneath each other. The overlap guard at `probe.js:22` is a module-scope boolean — the right idea in the one place it cannot work. Replaced by a leased job table claimed `for update skip locked`. |
-| **Hysteresis in a `Map`** | `store.js:17` | Two replicas each hold half the evidence, each count to three separately, and neither gets there. Now a row, updated in one atomic upsert. |
-| **Nineteen `BEACON_*_URL` variables and 922 lines of `targets.js`** | `env.js:100-127`, `targets.js` | Adding a service to the estate meant editing the monitor, and every default is a container name that is right in one deployment. Replaced by a `probes` table plus one `BEACON_TARGETS` variable. |
-| **Idempotent DDL run on every boot** | `db.js:52-172` | No version table, no advisory lock, no ordering guarantee. Two replicas booting together race and one crash-loops. Replaced by versioned migrations under `@cloudsforge/db`'s advisory lock, run by a separate one-shot process. |
-| **`redactStatus`** | `server.js:247-271` | It emits `t.name` and `incidents[].subject` verbatim — `pay.rates`, `hearth.seed` — which is internal topology. 02-target-architecture.md:724 records this and it is correct; I re-checked the source. Replaced by a projection that publishes **product groups only**. |
-| **`BEACON_TOKEN` defaulting to `''`** | `env.js:85` | An unauthenticated-by-accident `/metrics` the moment somebody flips a check. Now required at boot. |
-| **The bundled dashboard and SSE stream** | `public/`, `server.js:275-294` | Grafana owns dashboards now (AD-20) and `status-web` owns the public page. A second UI is a second thing to keep true. |
+| **The entire schedule** — `setInterval` for probes, one per journey, one for the write buffer | `probe.js`, `schedule.js`, `store.js` | Per-process. Two replicas probe everything twice, write two check rows per cycle, halve every uptime denominator when one restarts, and move a synthetic account's balance underneath each other. The overlap guard at `probe.js` is a module-scope boolean — the right idea in the one place it cannot work. Replaced by a leased job table claimed `for update skip locked`. |
+| **Hysteresis in a `Map`** | `store.js` | Two replicas each hold half the evidence, each count to three separately, and neither gets there. Now a row, updated in one atomic upsert. |
+| **Nineteen `BEACON_*_URL` variables and 922 lines of `targets.js`** | `env.js`, `targets.js` | Adding a service to the estate meant editing the monitor, and every default is a container name that is right in one deployment. Replaced by a `probes` table plus one `BEACON_TARGETS` variable. |
+| **Idempotent DDL run on every boot** | `db.js` | No version table, no advisory lock, no ordering guarantee. Two replicas booting together race and one crash-loops. Replaced by versioned migrations under `@cloudsforge/db`'s advisory lock, run by a separate one-shot process. |
+| **`redactStatus`** | `server.js` | It emits `t.name` and `incidents[].subject` verbatim — `pay.rates`, `hearth.seed` — which is internal topology. 02-target-architecture.md records this and it is correct; I re-checked the source. Replaced by a projection that publishes **product groups only**. |
+| **`BEACON_TOKEN` defaulting to `''`** | `env.js` | An unauthenticated-by-accident `/metrics` the moment somebody flips a check. Now required at boot. |
+| **The bundled dashboard and SSE stream** | `public/`, `server.js` | Grafana owns dashboards now (AD-20) and `status-web` owns the public page. A second UI is a second thing to keep true. |
 | **The EVM conformance runner's own execution** | `conformance.js` | Corpus replay belongs to `@cloudsforge/conformance`, which classifies identical / benign / breaking and exits 1 only on breaking. This service records the *result* and makes it a gate input. |
 
 ### An inherited claim that was false
 
-02-target-architecture.md:509-513 says Beacon's `/metrics` is auth-gated and that scraping it costs
-a credential. **True** — `server.js:373` gates it, and `deploy/prometheus/prometheus.yml:90-97`
+02-target-architecture.md says Beacon's `/metrics` is auth-gated and that scraping it costs
+a credential. **True** — `server.js` gates it, and `deploy/prometheus/prometheus.yml`
 already presents the header. Recorded here rather than re-discovered.
 
 The claim I could **not** confirm is subtler and is recorded because it changes behaviour: the
-frozen service's own `metrics.js:8-12` argues that `/metrics` must never touch Postgres, because
+frozen service's own `metrics.js` argues that `/metrics` must never touch Postgres, because
 "a metrics endpoint that queries the database gives anyone who can reach it a way to put load on
 the database by scraping in a loop". That reasoning is sound for a single-replica monitor holding
 live state in a `Map`, and **it does not survive replicas**: two replicas serving from memory
@@ -252,7 +252,7 @@ Definitions are code (`src/estate.ts`, `src/ecosystem.ts`, `src/browser/`); oper
 (`muted`) is a row, preserved across deploys. Scheduling is a leased job.
 
 **Only journeys that actually exercise something are declared.** The critical-path set in
-13-operational-model.md:435 is nine — register, sign in, SSO handoff, deposit, convert, spend,
+13-operational-model.md is nine — register, sign in, SSO handoff, deposit, convert, spend,
 withdraw, mint deploy, market purchase.
 
 **A skip can neither open an incident nor close one.** A skip is "not applicable — never green,
@@ -493,13 +493,13 @@ against these names. Renaming one empties a panel and evaluates a rule to nothin
 **The 400-day retention line applies to `check_rollups`, not to Prometheus.** Prometheus cannot
 downsample and has one retention for all data at one resolution; the 5-minute recording rules in
 `deploy/prometheus/rules/slo.yaml` are the honest half of that story. See
-02-target-architecture.md:501-507.
+02-target-architecture.md.
 
 ---
 
 ## 9. Alertmanager
 
-`POST /api/alerts/webhook`, which `deploy/alertmanager/alertmanager.yml:118` already targets. Every
+`POST /api/alerts/webhook`, which `deploy/alertmanager/alertmanager.yml` already targets. Every
 alert opens a Beacon incident as well as being delivered, because Beacon already owns incident
 open/close, the hysteresis, the timeline and the status page — and two incident systems is two
 records to reconcile at the worst possible moment. Redelivery dedupes into one incident. The

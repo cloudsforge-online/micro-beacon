@@ -14,10 +14,10 @@
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  * **THE OBSERVATION PLANE IS A LEAF, AND THIS FILE IS WHERE THAT IS ENFORCED.**
  *
- * 07-dependency-map.md:76 — "No service calls `beacon`". Nothing here dials another service at
+ * 07-dependency-map.md — "No service calls `beacon`". Nothing here dials another service at
  * boot, nothing blocks on one, and every upstream probe is SOFT. A monitor that cannot start
  * because the thing it monitors is down is a monitor that is absent at the only moment anyone
- * wants it, and 07-dependency-map.md:147 already records the intended posture: "beacon failing is
+ * wants it, and 07-dependency-map.md already records the intended posture: "beacon failing is
  * not a service failure".
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *

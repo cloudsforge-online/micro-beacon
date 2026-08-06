@@ -4,7 +4,7 @@
  * An incident is a **state transition that survived hysteresis**, not a failed check. That
  * distinction is the difference between a monitor you read and a monitor you mute, and it is the
  * one idea worth carrying forward whole from the service this supersedes
- * (`infra/beacon/src/incidents.js:1-3`).
+ * (`infra/beacon/src/incidents.js`).
  *
  * Everything that can open one — a probe crossing `failThreshold`, a journey failing twice
  * running, an Alertmanager webhook, an operator — comes through this module, so there is exactly
@@ -14,7 +14,7 @@
  * **DEDUPE IS THE PARTIAL UNIQUE INDEX, NOT A `Map` IN A PROCESS.**
  *
  * The frozen service holds open incidents in a module-scope `Map` keyed on `scope:subject`
- * (`incidents.js:17-18`) and separately writes an `ON CONFLICT` insert. With one replica that
+ * (`incidents.js`) and separately writes an `ON CONFLICT` insert. With one replica that
  * works. With two, each replica holds half the open set: replica A opens an incident, replica B
  * knows nothing about it, and B's next failing cycle tries to open it again. The database catches
  * that — `incidents_open_uniq` is why — but only because the index exists; the in-memory half was
@@ -28,7 +28,7 @@
 import type { Sql } from '@cloudsforge/db'
 
 /**
- * The ladder from 13-operational-model.md:529.
+ * The ladder from 13-operational-model.md.
  *
  * The values sort correctly as text — `'sev1' < 'sev2'` — which is why `least()` is a correct
  * severity escalation in SQL and no ordering table is needed. That is a property of the naming,

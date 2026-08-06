@@ -50,7 +50,7 @@ import { money, poolOf, stakeOf, stakersOf, weiToDecimal, type ChainAccess } fro
  *
  * `foresight.<apex>/markets` is BOTH a client route and an API resource — `foresight-web` owns
  * `/markets/:id` as a page and `micro-foresight` owns it as JSON. `deploy/gateway/dynamic/
- * estate-web.yml:451-455` splits them on this header, and a request without it is answered by
+ * estate-web.yml` splits them on this header, and a request without it is answered by
  * nginx with `index.html` and a 200. A journey that then `JSON.parse`d it would report the service
  * broken; one that checked only the status would report it working. Both are wrong, and the header
  * is the whole of the difference.
@@ -408,7 +408,7 @@ const filterSetMatchesService: Implementation = (config, scenario) =>
  * **THIS JOURNEY IS RED ON THIS ESTATE, AND THE RED IS A REAL DEFECT THAT NOTHING ELSE SEES.**
  *
  * `foresight.<apex>/markets/<id>` is both a client route and an API resource, split by the gateway
- * on `Accept: application/json` (`deploy/gateway/dynamic/estate-web.yml:451-455`). The HTML the
+ * on `Accept: application/json` (`deploy/gateway/dynamic/estate-web.yml`). The HTML the
  * document navigation receives is cacheable and carries no `Vary: Accept`, so Chromium's HTTP cache
  * answers the bundle's OWN `fetch()` for the same URL out of that entry — with `text/html`. The
  * page then sits on "Loading the market" for ever.

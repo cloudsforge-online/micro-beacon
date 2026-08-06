@@ -4,10 +4,10 @@
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  * **ONLY JOURNEYS THAT ACTUALLY EXERCISE SOMETHING ARE DECLARED HERE.**
  *
- * The critical-path set in 13-operational-model.md:435 is nine journeys — register, sign in, SSO
+ * The critical-path set in 13-operational-model.md is nine journeys — register, sign in, SSO
  * handoff, deposit, convert, spend, withdraw, mint deploy, market purchase. Five of them move
  * money across a chain, and the services that would do so are not deployed
- * (18-build-status.md:43: "nothing is deployed"). So they are **absent** rather than declared and
+ * (18-build-status.md: "nothing is deployed"). So they are **absent** rather than declared and
  * left to skip.
  *
  * That is a deliberate choice and it is the safe one in both directions:
@@ -59,8 +59,8 @@
  * **These citations name a route and not a line, and that is a correction rather than a style
  * choice.** The list carried line numbers until the audit that produced this comment checked them.
  * Two were wrong in the way that is worst — they resolved, to real code that was not the route
- * claimed. `worlds/src/server.ts:467` pointed into the entitlement handler's `recordGrant` call;
- * `POST /v1/titles` is nowhere near it. `market/src/server.ts:618` pointed at the collections
+ * claimed. `worlds/src/server.ts` pointed into the entitlement handler's `recordGrant` call;
+ * `POST /v1/titles` is nowhere near it. `market/src/server.ts` pointed at the collections
  * block; `/v1/listings` is further down. A citation that fails loudly is a citation somebody
  * fixes. A citation that lands on plausible unrelated code is one a reader believes.
  *

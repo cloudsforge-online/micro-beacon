@@ -9,7 +9,7 @@
  *
  * **What this module owns is the operational fact that a run happened and what it said.** Beacon
  * is where the corpus is executed on a schedule and where the result becomes a gate input, because
- * a comparison nothing runs is a comparison nobody has made. 00-current-state.md:301 records the
+ * a comparison nothing runs is a comparison nobody has made. 00-current-state.md records the
  * same situation on the chain side: the vector suites gate the rewrite's correctness and Hearth's
  * own CI runs none of them, so Beacon is the only place they are executed at all.
  *

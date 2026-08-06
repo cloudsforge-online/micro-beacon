@@ -19,7 +19,7 @@
  * the scheduler dying, a database being unreachable, a journey never having been deployed, a
  * probe's target being renamed — produces MISSING data, not red data. A gate that treats missing
  * as green is a gate that opens hardest exactly when the estate is least observable. The frozen
- * estate is the worked example: 18-build-status.md:150 records that no cross-service integration
+ * estate is the worked example: 18-build-status.md records that no cross-service integration
  * has ever run, and nothing anywhere reported that as a failure, because nothing was asked.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
@@ -201,7 +201,7 @@ export async function collectReasons(sql: Sql, inputs: GateInputs): Promise<read
 
   for (const journey of registered) {
     if (journey.muted) {
-      // 17-definition-of-done.md:237 — the muted count must be ZERO at a gate. A muted journey is
+      // 17-definition-of-done.md — the muted count must be ZERO at a gate. A muted journey is
       // not a passing journey; it is an unmeasured one, and it is `known` rather than `unknown`
       // because somebody chose it and left their name on it.
       reasons.push(
@@ -249,7 +249,7 @@ export async function collectReasons(sql: Sql, inputs: GateInputs): Promise<read
       continue
     }
 
-    // Three consecutive green runs, not one (13-operational-model.md:150). One green run after a
+    // Three consecutive green runs, not one (13-operational-model.md). One green run after a
     // red one is a flake that happened to land the right way up.
     const recent = await recentRuns(sql, journey.name, inputs.consecutiveGreen)
     if (recent.length < inputs.consecutiveGreen) {
@@ -287,7 +287,7 @@ export async function collectReasons(sql: Sql, inputs: GateInputs): Promise<read
       continue
     }
     if (budget.exhausted) {
-      // 100% consumed is a change freeze on that service (13-operational-model.md:444). This is
+      // 100% consumed is a change freeze on that service (13-operational-model.md). This is
       // the gate being the freeze rather than a paragraph describing one.
       reasons.push(
         reason(

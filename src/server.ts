@@ -25,7 +25,7 @@
  *
  * The second exists because of what this service is: when identity is the thing that has broken,
  * every route that requires an identity token is a route nobody can reach — and the routes nobody
- * can reach are the ones that would say identity has broken. `deploy/prometheus/prometheus.yml:90`
+ * can reach are the ones that would say identity has broken. `deploy/prometheus/prometheus.yml`
  * already presents this header; the estate's own correction to AD-20 is that the scrape needs it.
  *
  * **THE SECOND DOOR DOES NOT OPEN THE ADMIN ROUTES.** The static token satisfies READ, GATE and
@@ -102,7 +102,7 @@ export interface ServerDeps {
 export function registerServiceMetrics(metrics: Metrics): Metrics {
   return (
     metrics
-      // The series names below are NOT free to change: `deploy/prometheus/rules/slo.yaml:138,147`
+      // The series names below are NOT free to change: `deploy/prometheus/rules/slo.yaml,147`
       // and `deploy/grafana/dashboards/*.json` are already written against them. Renaming one
       // empties a panel and evaluates a rule to nothing — silently, which is the failure this
       // whole plane exists to prevent.
@@ -620,7 +620,7 @@ function buildRoutes(): Route[] {
     /**
      * The Alertmanager receiver.
      *
-     * `deploy/alertmanager/alertmanager.yml:118` already posts here. Every alert opens a Beacon
+     * `deploy/alertmanager/alertmanager.yml` already posts here. Every alert opens a Beacon
      * incident as well as being delivered, because Beacon already owns incident open/close, the
      * hysteresis, the timeline and the status page — and two incident systems is two records to
      * reconcile at the worst possible moment.
@@ -763,7 +763,7 @@ function buildRoutes(): Route[] {
  *
  * The service this supersedes serves `/metrics` from memory and never touches Postgres, with a
  * stated reason: "a metrics endpoint that queries the database gives anyone who can reach it a way
- * to put load on the database by scraping in a loop" (`infra/beacon/src/metrics.js:8-12`). That
+ * to put load on the database by scraping in a loop" (`infra/beacon/src/metrics.js`). That
  * reasoning was right for a single-replica monitor holding live state in a `Map`. It does not
  * survive replicas — a two-replica deployment serving from memory publishes two different answers
  * depending on which one Prometheus reached, and the panel flickers between them.
@@ -894,8 +894,8 @@ interface AuthOptions {
  * The line is drawn at `adminOnly` rather than at read-only, and that is a decision rather than a
  * compromise. Break-glass exists so the estate can be READ when identity is down, but its actual
  * deployed holders also legitimately WRITE two non-admin routes: Alertmanager posts
- * `/api/alerts/webhook` to open incidents (`alertmanager.yml:118`) and the conformance CLI posts
- * `/v1/conformance` (`conformance/src/cli.ts:298`). Neither holds an identity credential, and
+ * `/api/alerts/webhook` to open incidents (`alertmanager.yml`) and the conformance CLI posts
+ * `/v1/conformance` (`conformance/src/cli.ts`). Neither holds an identity credential, and
  * cutting them to read-only would mean alerts that open no incident — losing the estate's
  * incident record at the exact moment it is needed. Nothing that holds this token needs an
  * `adminOnly` route. The one caller that used to, `beacon slo-seed --token`, already documents

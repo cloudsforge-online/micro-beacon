@@ -21,16 +21,16 @@
  *     before the object reaches a socket.
  *
  * Why this much machinery for a status page: "our status page told the attacker which service fell
- * over first" is not worth a nicer page. The withheld set is named in 13-operational-model.md:333
+ * over first" is not worth a nicer page. The withheld set is named in 13-operational-model.md
  * — per-service latency, error rates, **internal target names**, replica counts, journey step
  * names, error strings, and the `proves` text on each probe.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
- * **THE CORRECTION THIS MODULE EXISTS TO IMPLEMENT.** 02-target-architecture.md:724-728 records
- * that the frozen `redactStatus` (`infra/beacon/src/server.js:247-271`) is *not* sufficient: it
+ * **THE CORRECTION THIS MODULE EXISTS TO IMPLEMENT.** 02-target-architecture.md records
+ * that the frozen `redactStatus` (`infra/beacon/src/server.js`) is *not* sufficient: it
  * emits `t.name` and `incidents[].subject` verbatim — `pay.rates`, `hearth.seed` — which is
  * internal topology, and it carries no maintenance and no chain fields. That is true; I checked
- * the source. `server.js:265-268` publishes `subject` on every incident and `server.js:255`
+ * the source. `server.js` publishes `subject` on every incident and `server.js`
  * publishes `t.name` on every target.
  *
  * So target names do not appear here **at all**. The unit of publication is the PRODUCT GROUP —
