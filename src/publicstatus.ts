@@ -190,9 +190,41 @@ export function projectIncident(
 export interface PublicDay {
   readonly date: string
   readonly state: PublicState
+  /**
+   * How much of that day came back clean, in parts per million, `0` to `1_000_000`.
+   *
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   * **THE ONE NUMBER THIS DOCUMENT PUBLISHES, AND WHY IT IS NOT THE THING THE REDACTION SET
+   * REFUSES.**
+   *
+   * 13-operational-model.md withholds "per-service latency, error rates, internal target names,
+   * replica counts, journey step names, error strings". A per-service error rate is refused
+   * because it names a service. This is a share of the checks in ONE PRODUCT GROUP on ONE DAY,
+   * and the group is the unit this whole projection publishes in — "Wallet", never `pay.rates`.
+   * It says how much of a day was clean; it cannot say which service made it dirty, because the
+   * probe names were summed away before this number existed.
+   *
+   * The DENOMINATOR is deliberately not published. The count of checks in a group in a day is
+   * (probes in the group) × (cadence), which is internal topology by arithmetic — close enough to
+   * a replica count to sit inside the withheld set. A ratio is the largest true thing that can be
+   * said here without saying that.
+   *
+   * **Parts per million as an integer, not a float, and not a percentage.** `slo.ts` already
+   * argues this for `objective_ppm`: floating point in an availability figure is a correctness
+   * bug, and a percentage rounded to one decimal cannot express the difference between a perfect
+   * day and one bad check in ten thousand — which is precisely the difference this field exists
+   * to carry. It is computed by rounding DOWN, so this document never claims a day was cleaner
+   * than it was.
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   */
+  readonly cleanPpm: number
 }
 
-export const PUBLIC_DAY_FIELDS = ['date', 'state'] as const satisfies readonly (keyof PublicDay)[]
+export const PUBLIC_DAY_FIELDS = [
+  'date',
+  'state',
+  'cleanPpm',
+] as const satisfies readonly (keyof PublicDay)[]
 
 const _publicDayIsExact: Exact<keyof PublicDay & string, (typeof PUBLIC_DAY_FIELDS)[number]> = true
 void _publicDayIsExact
@@ -323,14 +355,95 @@ export function worst(states: readonly PublicState[]): PublicState {
   return out
 }
 
+/* ------------------------------------------------------------------ one day of one group */
+
+/**
+ * What `check_rollups` summed to for one product group on one day. Counts of CHECKS, not of
+ * probes and not of services — the probe names are already gone by the time this exists.
+ */
+export interface DayCounts {
+  /** Every check that ran, whatever it came back as. Never zero; see `projectDay`. */
+  readonly checks: number
+  readonly degraded: number
+  readonly down: number
+}
+
+/** One million, the unit of `cleanPpm`. Spelled here so the field is not a bare literal. */
+const DAY_PPM = 1_000_000
+
+/**
+ * The share of a day that came back clean, in parts per million, rounded DOWN.
+ *
+ * `checks` is bounded by (probes in a group) × (checks per probe per day) — four figures at this
+ * estate's cadences — so `clean * DAY_PPM` stays far below `Number.MAX_SAFE_INTEGER` and the
+ * arithmetic is exact in `number`. `slo.ts` uses `bigint` for the same reason it uses ppm at all,
+ * over a window that really can overflow; this one cannot, and a `bigint` on the wire would
+ * serialise as a string.
+ */
+export function cleanPpm(counts: DayCounts): number {
+  const clean = counts.checks - counts.degraded - counts.down
+  return Math.floor((clean * DAY_PPM) / counts.checks)
+}
+
+/**
+ * A day's colour, from its counts.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THIS WAS A BOOLEAN OR, AND IT PUBLISHED A FALSE DOCUMENT FOR FOUR CONSECUTIVE DAYS.**
+ *
+ * The rule was: a day is `outage` if ANYTHING was down in it. One failed check out of thousands,
+ * anywhere in the group, at any hour, painted the whole day red. On 2026-08-07
+ * `status.cloudsforge.online` reported every one of twenty product groups as out for four days
+ * running while the estate was answering 30/30 HTTPS 200s, and `status-web` faithfully rendered
+ * "0.0% of 4 measured days came back clean" underneath a green `Operational` verdict — because
+ * the verdict comes from the live probe states and the bars came from this fold, and the two
+ * disagreed. No amount of rewording downstream fixes a renderer that is correctly rendering a
+ * wrong document. 32-roadmap-ui-and-content.md §8 calls this the single worst thing a stranger
+ * can currently be shown, and it is the estate's only public trust artefact.
+ *
+ * The old rule's stated defence was coarseness: "a percentage per day per group invites the
+ * question 'which service was that', which is the question this projection exists not to answer."
+ * That argument is sound about the WITHHELD SET and does not distinguish a boolean from a ratio.
+ * A red bar invites "which service was that" exactly as loudly as a 97.4% bar does, and neither
+ * one can answer it, because the probe names were summed away in the query. What the boolean
+ * bought was not privacy. It was a claim the service could not support.
+ *
+ * **The replacement has no tunable threshold, deliberately.** Any "outage above N% down" invents
+ * N, and rule 1 of that roadmap — no number on a public surface that is not checkable against
+ * something real — applies to a constant that decides a colour as much as to one that is printed.
+ * So the rule is a comparison instead:
+ *
+ *   * `outage`      — more checks came back down than came back up. The day was majority broken.
+ *   * `degraded`    — something was down or degraded, and most of the day was not.
+ *   * `operational` — nothing was down and nothing was degraded.
+ *
+ * The cost is stated rather than hidden: a day that was 40% down reads `degraded`, which is
+ * gentler than it deserves. That is what `cleanPpm` is for. The colour is a summary and the ratio
+ * is the claim; a reader who wants to know how bad Tuesday was is told, to six figures, and is
+ * never told it by a constant somebody picked.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export function dayState(counts: DayCounts): PublicState {
+  const up = counts.checks - counts.degraded - counts.down
+  if (counts.down > up) return 'outage'
+  if (counts.down > 0 || counts.degraded > 0) return 'degraded'
+  return 'operational'
+}
+
 export interface ProjectionInput {
   readonly generatedAt: Date
   readonly probes: readonly { readonly productGroup: string; readonly state: ReportedState }[]
-  readonly uptime: readonly {
+  /**
+   * COUNTS, not verdicts. `dailyUptime` used to classify each day itself and hand this function a
+   * finished `PublicState`, which put the estate's most public fold in the one place that cannot
+   * be exercised without a database — and it is the fold, not the query, that was wrong for four
+   * days. Handing over the raw sums moves `dayState` and `cleanPpm` in here, where `projectStatus`
+   * already lives precisely so "the leak test does not need a database, a socket or a clock".
+   */
+  readonly uptime: readonly (DayCounts & {
     readonly productGroup: string
     readonly day: string
-    readonly state: PublicState
-  }[]
+  })[]
   readonly incidents: readonly { readonly incident: Incident; readonly updates: readonly IncidentUpdate[] }[]
   readonly maintenance: readonly {
     readonly productGroup: string
@@ -356,8 +469,22 @@ export function projectStatus(input: ProjectionInput): PublicStatus {
 
   const daysByGroup = new Map<string, PublicDay[]>()
   for (const row of input.uptime) {
+    // A day with no checks in it is NOT a bar. It is dropped, so the array carries only days this
+    // service actually measured and `status-web` can say "measured since {the first date here}"
+    // rather than counting an unmeasured day as one that came back dirty — which is the other half
+    // of what made the 2026-08-07 page read "0.0% of 4 measured days came back clean · 86 days we
+    // never measured". `dailyUptime` already excludes them in SQL; this is the guard for any other
+    // caller, and it is here rather than inside `dayState` because there is no honest colour for a
+    // day nobody looked at. Rendering a named hole beats painting a plausible one.
+    if (row.checks <= 0) continue
     const list = daysByGroup.get(row.productGroup) ?? []
-    list.push(seal(PUBLIC_DAY_FIELDS, { date: row.day, state: row.state }))
+    list.push(
+      seal(PUBLIC_DAY_FIELDS, {
+        date: row.day,
+        state: dayState(row),
+        cleanPpm: cleanPpm(row),
+      }),
+    )
     daysByGroup.set(row.productGroup, list)
   }
 
@@ -405,29 +532,54 @@ export function projectStatus(input: ProjectionInput): PublicStatus {
 /**
  * Ninety days of per-group uptime, from `check_rollups`.
  *
- * A day is `outage` if anything was down in it, `degraded` if anything was degraded, and
- * `operational` otherwise. Deliberately coarse: a percentage per day per group invites the
- * question "which service was that", which is the question this projection exists not to answer.
+ * **This function no longer decides anything.** It sums, and `projectStatus` classifies — see
+ * `dayState` for the fold that was wrong for four days and for why the replacement has no
+ * threshold in it. The split is deliberate: the classification is the part that was defective, and
+ * it now lives in the pure module that the suite can drive without a database, a socket or a clock.
+ *
+ * `sum(r.total)` is the denominator and it is summed here rather than derived from
+ * `up + degraded + down`, because `checks` has a `state in ('up','degraded','down')` constraint
+ * today and a fourth word added tomorrow would silently make a derived denominator too small — and
+ * a too-small denominator makes every day look cleaner than it was, which is the direction an
+ * honesty fix must never be able to fail in.
+ *
+ * `having sum(r.total) > 0` rather than letting a zero-check day through: a rollup row that
+ * recorded nothing is not a measurement, and a day that was never measured must not be given a
+ * colour. It is absent from the array instead, which is what lets the reader say what is missing.
  */
 export async function dailyUptime(
   sql: Sql,
   days = 90,
-): Promise<readonly { productGroup: string; day: string; state: PublicState }[]> {
+): Promise<readonly (DayCounts & { productGroup: string; day: string })[]> {
   const rows = (await sql`
     select p.product_group,
            to_char(date_trunc('day', r.bucket), 'YYYY-MM-DD') as day,
+           sum(r.total)::bigint    as checks,
            sum(r.down)::bigint     as down,
            sum(r.degraded)::bigint as degraded
       from check_rollups r
       join probes p on p.name = r.probe_name
      where r.bucket > now() - make_interval(days => ${days})
      group by p.product_group, day
+    having sum(r.total) > 0
      order by day
-  `) as unknown as Array<{ product_group: string; day: string; down: string; degraded: string }>
+  `) as unknown as Array<{
+    product_group: string
+    day: string
+    checks: string
+    down: string
+    degraded: string
+  }>
   return rows.map((row) => ({
     productGroup: row.product_group,
     day: row.day,
-    state: BigInt(row.down) > 0n ? 'outage' : BigInt(row.degraded) > 0n ? 'degraded' : 'operational',
+    // `sum(...)::bigint` comes back as a string from `postgres`, and these are counts of checks in
+    // one group on one day — four figures at this estate's cadences. `Number` is exact here and
+    // `cleanPpm` documents the headroom; the `bigint` the old fold used bought nothing but a
+    // comparison against `0n`.
+    checks: Number(row.checks),
+    down: Number(row.down),
+    degraded: Number(row.degraded),
   }))
 }
 

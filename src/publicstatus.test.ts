@@ -17,6 +17,8 @@ import {
   PUBLIC_MAINTENANCE_FIELDS,
   PUBLIC_STATUS_FIELDS,
   PUBLIC_UPDATE_FIELDS,
+  cleanPpm,
+  dayState,
   projectIncident,
   projectStatus,
   publicStateOf,
@@ -269,8 +271,8 @@ describe('the whole public document', () => {
       { productGroup: 'Account', state: 'up' },
     ],
     uptime: [
-      { productGroup: 'Wallet', day: '2026-07-30', state: 'operational' },
-      { productGroup: 'Wallet', day: '2026-07-31', state: 'outage' },
+      { productGroup: 'Wallet', day: '2026-07-30', checks: 2880, degraded: 0, down: 0 },
+      { productGroup: 'Wallet', day: '2026-07-31', checks: 2880, degraded: 0, down: 2400 },
     ],
     incidents: [{ incident: internalIncident(), updates: [update()] }],
     maintenance: [
@@ -333,9 +335,13 @@ describe('the whole public document', () => {
 
   it('carries no numeric latency or error rate', () => {
     // Named separately from the string check because a number that leaked would not be caught by
-    // searching for a word. The public document's only numbers are timestamps inside ISO strings.
+    // searching for a word. The document's ONLY published number is `cleanPpm`, a share of the
+    // checks in one product group on one day — see the note on `PublicDay.cleanPpm` for why that
+    // is not the per-service error rate 13-operational-model.md withholds, and why the
+    // denominator it was computed from is not published beside it.
     const serialised = JSON.stringify(document)
     assert.equal(/"(latencyMs|errorRate|p95|p99|uptimePercent)"/.test(serialised), false)
+    assert.equal(/"(checks|total|up|down|degraded|probes)":/.test(serialised), false)
   })
 
   it('is stable under a probe whose state has never been read', () => {
@@ -348,5 +354,119 @@ describe('the whole public document', () => {
     })
     assert.equal(empty.state, 'operational')
     assert.equal(empty.groups[0]?.uptime.length, 0)
+  })
+})
+
+/* ─────────────────────────────── the daily bars ─────────────────────────────── */
+
+describe('a day is a ratio, not a boolean', () => {
+  /*
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   * THE DOCUMENT THIS SERVICE PUBLISHED FOR FOUR DAYS, AND THE REASON IT IS THE WORST DEFECT ON
+   * THE ESTATE'S ONLY PUBLIC TRUST ARTEFACT.
+   *
+   * `dailyUptime` folded a boolean OR over every check in a day: one failure anywhere in a group
+   * at any hour painted the whole day `outage`. On 2026-08-07 `status.cloudsforge.online`
+   * reported all twenty product groups out for four consecutive days while the estate was
+   * answering 30/30 HTTPS 200s, and `status-web` rendered "0.0% of 4 measured days came back
+   * clean" beneath a green `Operational` chip — the chip from the live probe states, the bars
+   * from this fold, the two contradicting each other on the same screen.
+   *
+   * The first case below is that exact shape. It fails against the old fold and is the whole
+   * point of this file's existence, so it is written as the measurement rather than as a unit:
+   * 2,879 clean checks and one bad one is not an outage, and no reading of the word makes it one.
+   * ════════════════════════════════════════════════════════════════════════════════════════════
+   */
+  it('does not call a day an outage because one check out of 2,880 failed', () => {
+    assert.equal(dayState({ checks: 2880, degraded: 0, down: 1 }), 'degraded')
+    // And it says how nearly clean it was, rather than leaving the colour to carry the whole
+    // claim: 2,879/2,880 is 999,652 parts per million.
+    assert.equal(cleanPpm({ checks: 2880, degraded: 0, down: 1 }), 999_652)
+  })
+
+  it('still calls a majority-down day an outage', () => {
+    // The replacement is not a softening. More down than up is the comparison, and it needs no
+    // threshold anybody had to choose — which is rule 1 of 32-roadmap-ui-and-content.md applied
+    // to a constant that decides a colour rather than to one that is printed.
+    assert.equal(dayState({ checks: 2880, degraded: 0, down: 2400 }), 'outage')
+    assert.equal(dayState({ checks: 100, degraded: 0, down: 51 }), 'outage')
+    assert.equal(dayState({ checks: 100, degraded: 0, down: 50 }), 'degraded')
+  })
+
+  it('degrades on a degraded check even when nothing was ever down', () => {
+    assert.equal(dayState({ checks: 2880, degraded: 3, down: 0 }), 'degraded')
+  })
+
+  it('reserves operational for a day in which nothing failed at all', () => {
+    assert.equal(dayState({ checks: 2880, degraded: 0, down: 0 }), 'operational')
+    assert.equal(cleanPpm({ checks: 2880, degraded: 0, down: 0 }), 1_000_000)
+  })
+
+  it('counts a degraded check as not clean, so the ratio and the colour agree', () => {
+    // A degraded check is a check that did not come back clean. If `cleanPpm` counted it as clean
+    // the page could show a `degraded` bar reading 100%, which reads as a rendering bug and
+    // teaches the reader to disbelieve the number.
+    assert.equal(cleanPpm({ checks: 1000, degraded: 10, down: 0 }), 990_000)
+  })
+
+  it('rounds DOWN, so the page never claims a day was cleaner than it was', () => {
+    // 999/1000 is 999,000 exactly; 2/3 is 666,666.67 and must not become 666,667.
+    assert.equal(cleanPpm({ checks: 3, degraded: 0, down: 1 }), 666_666)
+  })
+
+  it('gives a day nobody measured no bar at all, rather than a green one', () => {
+    /*
+     * The other half of what made that page wrong. `status-web` reported "86 days we never
+     * measured" alongside the four it had, and the honest shape for an unmeasured day is
+     * ABSENCE — rule 2 of the roadmap, render a named hole rather than a plausible screen over
+     * nothing. A zero-check row must not be given a colour, because every colour available is a
+     * claim about an observation that was never made.
+     */
+    const document = projectStatus({
+      generatedAt: new Date('2026-07-31T10:00:00.000Z'),
+      probes: [{ productGroup: 'Wallet', state: 'up' }],
+      uptime: [
+        { productGroup: 'Wallet', day: '2026-07-29', checks: 0, degraded: 0, down: 0 },
+        { productGroup: 'Wallet', day: '2026-07-30', checks: 2880, degraded: 0, down: 0 },
+      ],
+      incidents: [],
+      maintenance: [],
+    })
+    assert.deepEqual(
+      document.groups[0]?.uptime.map((day) => day.date),
+      ['2026-07-30'],
+      'a day with no checks in it was given a bar, and therefore a verdict',
+    )
+  })
+
+  it('publishes the ratio on every bar, so a reader is never left with only a colour', () => {
+    const document = projectStatus({
+      generatedAt: new Date('2026-07-31T10:00:00.000Z'),
+      probes: [{ productGroup: 'Wallet', state: 'up' }],
+      uptime: [{ productGroup: 'Wallet', day: '2026-07-30', checks: 2880, degraded: 0, down: 1 }],
+      incidents: [],
+      maintenance: [],
+    })
+    const day = document.groups[0]?.uptime[0]
+    assert.equal(day?.state, 'degraded')
+    assert.equal(day?.cleanPpm, 999_652)
+  })
+
+  it('publishes the share and never the denominator it was computed from', () => {
+    // The count of checks in a group in a day is (probes in the group) × (cadence), which is
+    // internal topology by arithmetic. `PUBLIC_DAY_FIELDS` is what enforces this and `seal` is
+    // the runtime backstop; this asserts the consequence on the wire.
+    const document = projectStatus({
+      generatedAt: new Date('2026-07-31T10:00:00.000Z'),
+      probes: [{ productGroup: 'Wallet', state: 'up' }],
+      uptime: [{ productGroup: 'Wallet', day: '2026-07-30', checks: 2880, degraded: 4, down: 1 }],
+      incidents: [],
+      maintenance: [],
+    })
+    const serialised = JSON.stringify(document)
+    assert.equal(serialised.includes('2880'), false, 'the check count reached the public document')
+    assert.deepEqual(Object.keys(document.groups[0]?.uptime[0] ?? {}).sort(), [
+      ...PUBLIC_DAY_FIELDS,
+    ].sort())
   })
 })
