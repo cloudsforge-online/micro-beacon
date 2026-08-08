@@ -47,6 +47,7 @@ import type { BrowserConfig, BrowserPage } from './driver.ts'
 import type { Scenario } from './catalogue.ts'
 import { browserAvailable, withPage } from './driver.ts'
 import { syntheticCredential } from './fixtures.ts'
+import { wait, waitMsFor } from './backoff.ts'
 
 /* ------------------------------------------------------------------ fixtures, built here */
 
@@ -156,8 +157,12 @@ async function registerUploader(ctx: JourneyContext): Promise<string> {
     })
     if (response.status !== 429) break
     await response.arrayBuffer()
-    const after = Number(response.headers.get('retry-after') ?? '2')
-    await new Promise((r) => setTimeout(r, (Number.isFinite(after) ? after : 2) * 1000))
+    // `browser/backoff.ts`, like every other caller in this tier — not a `setTimeout` here. Rule 8
+    // bans one outside that file, and this line evaded the ban for as long as it did only because
+    // the raw NUL further up made the whole file binary to `grep`. The helper clamps to
+    // `MAX_WAIT_MS` and takes the journey's own signal, so an abandoned run stops waiting; the
+    // hand-rolled sleep it replaces did neither. micro-org#262.
+    await wait(waitMsFor(response.headers.get('retry-after')), ctx.signal)
   }
   if (response === null || !response.ok) {
     throw new Error(
