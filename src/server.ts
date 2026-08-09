@@ -63,7 +63,12 @@ import {
   openIncident,
   type Severity,
 } from './incidents.ts'
-import { latestConformance, recordConformanceRun, statusFor as conformanceStatusFor } from './conformance.ts'
+import {
+  CONFORMANCE_STATUSES,
+  latestConformance,
+  recordConformanceRun,
+  statusFor as conformanceStatusFor,
+} from './conformance.ts'
 import { latestRuns, listRegistered, setMuted, journeyStatusValue } from './journeys.ts'
 import { listProbes, listStates, stateValue, upsertProbe } from './probes.ts'
 import { activeMaintenance, dailyUptime, projectStatus } from './publicstatus.ts'
@@ -153,6 +158,43 @@ export function registerServiceMetrics(metrics: Metrics): Metrics {
         help: 'Conformance comparisons by result. A suite that could not be run reports under skipped, never under passed.',
         kind: 'gauge',
         labels: ['suite', 'result'],
+      })
+      /**
+       * ════════════════════════════════════════════════════════════════════════════════════════
+       * **AN EMPTY `beacon_conformance_vectors` MEANS "NOBODY HAS COMPARED ANYTHING", AND UNTIL
+       * THIS SERIES EXISTED NOTHING ON THE WIRE SAID SO.**
+       *
+       * `beacon_conformance_vectors{suite,result}` above is the name and the label set
+       * `HearthConformanceVectorsFailing` asks for, `result="failed"` included, and it has been
+       * correct since the gate was built. It is nevertheless ABSENT from the estate: micro-org#310
+       * re-measured `/api/v1/label/__name__/values` on 2026-08-09 across 1,323 metric names and
+       * found no `conformance` substring at all.
+       *
+       * The reason is not the export. It is that `conformance_runs` has been empty since the table
+       * was created — `conformance/src/publish.ts` establishes it in as many words on 2026-08-04,
+       * by grepping the whole estate: `POST /v1/conformance` had no caller anywhere, in no
+       * repository and no CI workflow, which is also why the gate has reported
+       * `conformance_never_run` for its entire life. Zero rows means zero samples, and a gauge with
+       * zero samples renders as `# HELP`/`# TYPE` and nothing else, so Prometheus never learns the
+       * name.
+       *
+       * `beacon_conformance_vectors` MUST NOT be given a zero to fix that. A count of vectors needs
+       * a `suite` to belong to, there is no suite to name, and a global
+       * `beacon_conformance_vectors{result="failed"} 0` would make the page read "zero failing
+       * vectors" when the truthful answer is "no vector has been replayed". A fabricated green is
+       * worse than a silent rule, because it looks fixed.
+       *
+       * So the never-run fact gets its OWN series, at the grain it actually has — suites, not
+       * vectors — and every status is published every scrape including the zeroes, for the same
+       * reason `beacon_incidents_open` below does it: `sum(beacon_conformance_suites) == 0` is then
+       * a condition an alert can hold, and it is a different condition from "everything passes".
+       * ════════════════════════════════════════════════════════════════════════════════════════
+       */
+      .register({
+        name: 'beacon_conformance_suites',
+        help: 'Suites by the status of the most recent run of each. Every status every scrape, zeroes included: all-zero means no corpus has been replayed, which is not the same answer as everything passing.',
+        kind: 'gauge',
+        labels: ['status'],
       })
       .register({
         name: 'beacon_incidents_open',
@@ -821,7 +863,17 @@ export function scrapeRefresh(deps: {
       })
     }
 
-    for (const run of await latestConformance(deps.sql)) {
+    const conformance = await latestConformance(deps.sql)
+    for (const status of CONFORMANCE_STATUSES) {
+      // Written before the vector loop, and unconditionally, so that the one state this whole
+      // series exists for — nothing has ever run — is the state in which it still publishes.
+      deps.metrics.set(
+        'beacon_conformance_suites',
+        conformance.filter((run) => run.status === status).length,
+        { status },
+      )
+    }
+    for (const run of conformance) {
       deps.metrics.set('beacon_conformance_vectors', run.identical, { suite: run.suite, result: 'identical' })
       deps.metrics.set('beacon_conformance_vectors', run.benign, { suite: run.suite, result: 'benign' })
       deps.metrics.set('beacon_conformance_vectors', run.breaking, { suite: run.suite, result: 'failed' })
