@@ -29,7 +29,17 @@
 
 import type { Sql } from '@cloudsforge/db'
 
-export type ConformanceStatus = 'pass' | 'fail' | 'skip' | 'error'
+/**
+ * Every status a run can have, as a value and not only as a type.
+ *
+ * `scrapeRefresh` publishes `beacon_conformance_suites` with a zero for each of these on every
+ * scrape, so the list has to exist at runtime. Deriving the type FROM the list rather than writing
+ * both is what stops a fifth status from being added to the union and silently not gaining its
+ * zero — which would be a status that exists in the database and is invisible on the wire.
+ */
+export const CONFORMANCE_STATUSES = ['pass', 'fail', 'skip', 'error'] as const
+
+export type ConformanceStatus = (typeof CONFORMANCE_STATUSES)[number]
 
 export interface ConformanceRun {
   readonly id: string

@@ -196,6 +196,57 @@ describe('the http surface', { skip }, () => {
     assert.match(body, /beacon_conformance_vectors\{suite="wallet",result="failed"\} 1/)
   })
 
+  /**
+   * micro-org#310, the conformance row.
+   *
+   * These four assert on the SCRAPED BODY rather than on `scrapeRefresh`, because the defect the
+   * issue names is precisely a metric that exists in code and not on the wire — and the reason
+   * `beacon_conformance_vectors` was measured absent from the estate on 2026-08-09 is that a gauge
+   * with no samples renders as help text alone and Prometheus never learns the name.
+   */
+  it('publishes NO conformance vectors when no suite has ever run', async () => {
+    // The honest empty, and the one that must stay empty: a vector count needs a suite to belong
+    // to, and there is no suite to name. This is the state the estate has been in since the table
+    // was created.
+    const body = await (await call('/metrics', { token: TOKEN })).text()
+    assert.equal(/beacon_conformance_vectors\{/.test(body), false)
+  })
+
+  it('STILL publishes beacon_conformance_suites when no suite has ever run', async () => {
+    // The series that makes the empty above readable instead of mysterious. All four zeroes on a
+    // fresh estate; `sum() == 0` is "no corpus has been replayed", which is a different fact from
+    // "everything passes" and, before this, was a fact no scrape could carry.
+    const body = await (await call('/metrics', { token: TOKEN })).text()
+    assert.match(body, /^beacon_conformance_suites\{status="pass"\} 0$/m)
+    assert.match(body, /^beacon_conformance_suites\{status="fail"\} 0$/m)
+    assert.match(body, /^beacon_conformance_suites\{status="skip"\} 0$/m)
+    assert.match(body, /^beacon_conformance_suites\{status="error"\} 0$/m)
+  })
+
+  it('counts a suite under the status of its most recent run', async () => {
+    await recordConformanceRun(db(sql), {
+      suite: 'wallet',
+      status: 'fail',
+      identical: 57,
+      breaking: 1,
+    })
+    const body = await (await call('/metrics', { token: TOKEN })).text()
+    assert.match(body, /^beacon_conformance_suites\{status="fail"\} 1$/m)
+    // And the zero is still there. A `fail` that emptied `pass` would leave an alert on `pass`
+    // evaluating a stale sample rather than a zero.
+    assert.match(body, /^beacon_conformance_suites\{status="pass"\} 0$/m)
+  })
+
+  it('NEVER counts a skipped suite as a passing one', async () => {
+    // The same rule `conformance.ts` states and `gate.ts` enforces, now on the wire: a suite that
+    // could not be run is not a suite that passed. A gauge that folded `skip` into `pass` would
+    // report a corpus nobody executed as a corpus that is green.
+    await recordConformanceRun(db(sql), { suite: 'chain', status: 'skip', skipped: 8 })
+    const body = await (await call('/metrics', { token: TOKEN })).text()
+    assert.match(body, /^beacon_conformance_suites\{status="skip"\} 1$/m)
+    assert.match(body, /^beacon_conformance_suites\{status="pass"\} 0$/m)
+  })
+
   it('publishes a zero for every severity with no open incident', async () => {
     // A series that stops when the last incident closes leaves an alert evaluating a stale sample
     // rather than a zero.

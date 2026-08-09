@@ -483,7 +483,8 @@ did not earn.
 | `beacon_journeys_muted` | Must be zero at a gate. |
 | `beacon_slo_budget_remaining_ratio{slo}` | 0..1. |
 | `beacon_slo_budget_remaining_events{slo}` | Whole events. Negative means overspent, and by how much. |
-| `beacon_conformance_vectors{suite,result}` | `identical`, `benign`, `failed`, `skipped`. |
+| `beacon_conformance_vectors{suite,result}` | `identical`, `benign`, `failed`, `skipped`. A suite that has never run publishes **nothing** — a vector count needs a suite to belong to. |
+| `beacon_conformance_suites{status}` | `pass`, `fail`, `skip`, `error`, every one every scrape including the zeroes. All four at zero is *no corpus has been replayed*, which is not the same answer as everything passing. |
 | `beacon_incidents_open{severity}` | Every severity every scrape, including the zeroes — a series that stops leaves an alert evaluating a stale sample. |
 | plus the RED and job sets from `@cloudsforge/telemetry` | |
 
@@ -494,6 +495,34 @@ against these names. Renaming one empties a panel and evaluates a rule to nothin
 downsample and has one retention for all data at one resolution; the 5-minute recording rules in
 `deploy/prometheus/rules/slo.yaml` are the honest half of that story. See
 02-target-architecture.md.
+
+### 8.1 `beacon_chain_height_spread` is not here, and will not be until there are nodes to spread
+
+`ChainHeightSpreadSustained` — a **page** — reads `beacon_chain_height_spread > 3 for 15m`, and
+13-operational-model.md §5.5 assigns the whole Hearth family (`beacon_chain_height`,
+`beacon_chain_peers`, `beacon_chain_mempool`, `beacon_chain_height_spread`) to this service. None of
+them is exported, and micro-org#310 measured the spread absent from the estate on 2026-08-09.
+
+**Beacon observes no chain at all today.** `BEACON_TARGETS` in the deployed estate names nine HTTP
+services and no RPC endpoint; a probe records a status code and a latency and never reads a body;
+there is no `BEACON_*` variable that could hold a node address. That gap alone would be a thing to
+close. The reason it is not closed is the second fact:
+
+**The estate runs exactly one full Hearth node per network.** `deploy/compose/docker-compose.hearth-seed.yml`
+brings up a single seed as `cf-hearth-seed` on `HEARTH_NETWORK=hearth`, chain id 7411, and
+`docker-compose.miners.yml` says of the other two processes, in its own words, that they are *light
+miners, not nodes*: `bin/hearth-mine.js` "holds no chain and opens no port", it polls
+`/mining/template` and posts `/mining/submit` through the public gateway. There is nothing to ask
+for a height. The three-node topology the Grafana panel's legend still names — `seed`, `miner1`,
+`miner2` — exists only in `hearth/docker-compose.testnet.yml`, a local development bundle that the
+estate does not deploy. The testnet estate's seed is a *different chain* (7412, separate genesis,
+deliberately non-peering), so its height is not a second reading of the same question.
+
+A spread over a set of one observation is `0`, always, whatever the chain does. Publishing it would
+put a constant green on a page whose runbook opens with "the nodes report different heights" — a
+fabricated gauge, and worse than the silent rule it replaced, because it looks fixed. So this
+service exports nothing here on purpose. See the PR for micro-org#310 for the rule wording that
+replaces it, and re-open this when the estate runs two or more full nodes per network.
 
 ---
 
