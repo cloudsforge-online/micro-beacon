@@ -38,10 +38,10 @@ import {
   mark,
   runSmoke,
   since,
+  smokeCredentials,
   smokeHosts,
   surfaceHost,
   surfaceUrl,
-  type Credentials,
   type ImageOnPage,
   type PageObservation,
   type SmokeSurface,
@@ -49,16 +49,15 @@ import {
 import { collectPins, pinPolicy, type CertificateFacts } from './estatecert.ts'
 import { browserAvailable, launchArgs, newSink, type BrowserConfig } from './driver.ts'
 
+/**
+ * The handle the TRANSCRIBED fixtures below were captured with.
+ *
+ * A plain constant, and it no longer doubles as the browser half's credential. The pure half is a
+ * function of its fixtures and nothing else — reading an environment variable into it would mean
+ * the always-runs half of this file could pass or fail differently on two machines, which is the
+ * one property it has that makes it worth having.
+ */
 const HANDLE = 'estateadmin'
-
-const CREDENTIALS: Credentials = {
-  // Defaults, not secrets: this account exists only in a dev estate, and `deploy`'s own
-  // `estate-bootstrap.sh` creates it with this password. Overridable so the same suite can be
-  // pointed at an environment where the credential is a real one held in the runner.
-  identifier: process.env['BEACON_SMOKE_IDENTIFIER'] ?? 'estate-admin@example.test',
-  password: process.env['BEACON_SMOKE_PASSWORD'] ?? 'correct-horse-battery-staple-42',
-  handle: process.env['BEACON_SMOKE_HANDLE'] ?? HANDLE,
-}
 
 /**
  * The apex, defaulted rather than required.
@@ -755,6 +754,61 @@ test('a host that will not speak TLS is a reason, not a thrown setup error', asy
   assert.match(pins.reasons[0] ?? '', /no certificate to inspect/)
 })
 
+/* ============================================================== the credential has no default */
+
+/*
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **A DEFAULT PASSWORD IS A PUBLISHED PASSWORD, AND THIS ONE WAS.**
+ *
+ * `BEACON_SMOKE_PASSWORD` fell back to a constant that `deploy/scripts/estate-bootstrap.sh` also
+ * used as its `ADMIN_PASSWORD` default. Mainnet was bootstrapped without overriding it, so on
+ * 2026-08-09 that literal returned 200 from `POST https://api.cloudsforge.online/v1/auth/login`
+ * with `roles: ["player","admin"]` — out of a public repository. micro-org#276 has the whole
+ * measurement; the rotation revoked 149 sessions.
+ *
+ * These cases run everywhere, including CI, and they are the reason the fallback cannot come back
+ * quietly: restoring one makes the first case red with no estate anywhere.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+test('AN UNSET SMOKE PASSWORD IS A REFUSAL, NOT A DEFAULT', () => {
+  const verdict = smokeCredentials({})
+  assert.equal(verdict.ok, false, 'a default password came back — that is the defect, restored')
+  if (verdict.ok) return
+  // The reason has to be actionable on the machine it is read on. Naming the variable alone sends
+  // somebody to invent a value; naming the FILE the rotated one is already in does not.
+  assert.match(verdict.reason, /BEACON_SMOKE_PASSWORD/)
+  assert.match(verdict.reason, /compose\/estate\/tokens\.env/)
+  assert.match(verdict.reason, /micro-org#276/)
+})
+
+test('an empty string is unset — a variable exported without a value must not sign anything in', () => {
+  assert.equal(smokeCredentials({ BEACON_SMOKE_PASSWORD: '' }).ok, false)
+})
+
+test('the identifier and the handle keep their defaults, because neither is a secret', () => {
+  const verdict = smokeCredentials({ BEACON_SMOKE_PASSWORD: 'not-the-published-one' })
+  assert.ok(verdict.ok, verdict.ok ? '' : verdict.reason)
+  assert.deepEqual(verdict.credentials, {
+    identifier: 'estate-admin@example.test',
+    password: 'not-the-published-one',
+    handle: 'estateadmin',
+  })
+})
+
+test('all three are overridable, so the same suite can be pointed at another estate', () => {
+  const verdict = smokeCredentials({
+    BEACON_SMOKE_IDENTIFIER: 'someone@example.test',
+    BEACON_SMOKE_PASSWORD: 'a-different-one',
+    BEACON_SMOKE_HANDLE: 'someone',
+  })
+  assert.ok(verdict.ok, verdict.ok ? '' : verdict.reason)
+  assert.deepEqual(verdict.credentials, {
+    identifier: 'someone@example.test',
+    password: 'a-different-one',
+    handle: 'someone',
+  })
+})
+
 /* ================================================ the property this whole tier exists to have */
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -852,12 +906,33 @@ test('THE ESTATE, IN A REAL BROWSER, THROUGH THE REAL GATEWAY, WITH NOTHING STUB
     return
   }
 
+  /*
+   * ── THE CREDENTIAL IS READ HERE, AFTER THE TWO SKIPS, AND ITS ABSENCE IS A FAILURE ──────────
+   *
+   * `BEACON_SMOKE_PASSWORD` has no default any more: the constant it used to fall back to was
+   * published in a public repository and was the estate administrator's real password on mainnet
+   * until 2026-08-09 (micro-org#276). The replacement lives in the host's gitignored
+   * `compose/estate/tokens.env`.
+   *
+   * The ORDER is the whole of the design. Reading it at module scope and throwing would take this
+   * file's always-runs half down in CI, where there is no estate, no credential and no reason for
+   * either — and that half is the part that goes red when somebody weakens a check. Reading it
+   * after the reachability and browser skips means the only run that ever demands a password is
+   * one that has an estate in front of it and a browser to drive.
+   *
+   * And once we are in that run it is `assert`, never `t.skip`. An estate is up, Chromium is
+   * present, and the tier that exists because "a skipping check is exactly the shape of the defect
+   * this whole tier was written to end" must not answer "I had no password" with a green.
+   */
+  const credentials = smokeCredentials(process.env)
+  if (!credentials.ok) assert.fail(credentials.reason)
+
   const pins = await collectPins(smokeHosts(APEX))
   for (const reason of pins.reasons) t.diagnostic(`tls: ${reason}`)
 
   const result = await runSmoke({
     apex: APEX,
-    credentials: CREDENTIALS,
+    credentials: credentials.credentials,
     browser: { ...CONFIG, certificatePins: pins.spki },
   })
 

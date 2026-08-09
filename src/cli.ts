@@ -544,6 +544,18 @@ export async function runSmokeCommand(args: SmokeArgs): Promise<0 | 1 | 2> {
   const { collectPins } = await import('./browser/estatecert.ts')
   const { browserAvailable } = await import('./browser/driver.ts')
 
+  // FIRST, and before anything is dialled or launched. The credential is the cheapest of the three
+  // preconditions to check and the most annoying to discover late: a run that resolves an apex,
+  // collects sixteen certificate pins and starts Chromium before finding out it has no password
+  // has spent a minute to say something it knew at the first line. Exit 2 for the same reason the
+  // two below are — this command's contract is that it cannot report success without having
+  // looked, and "I had no credential" is not having looked.
+  const credentials = smoke.smokeCredentials(process.env)
+  if (!credentials.ok) {
+    stderr.write(`${credentials.reason}\n`)
+    return 2
+  }
+
   const reachable = await smoke.estateReachable(args.apex, undefined, args.env)
   if (!reachable.ok) {
     stderr.write(`${reachable.reason}\n`)
@@ -578,11 +590,7 @@ export async function runSmokeCommand(args: SmokeArgs): Promise<0 | 1 | 2> {
   const result = await smoke.runSmoke({
     apex: args.apex,
     env: args.env,
-    credentials: {
-      identifier: process.env['BEACON_SMOKE_IDENTIFIER'] ?? 'estate-admin@example.test',
-      password: process.env['BEACON_SMOKE_PASSWORD'] ?? 'correct-horse-battery-staple-42',
-      handle: process.env['BEACON_SMOKE_HANDLE'] ?? 'estateadmin',
-    },
+    credentials: credentials.credentials,
     browser: { ...config, certificatePins: pins.spki },
     surfaces: selected,
   })

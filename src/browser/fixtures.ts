@@ -39,6 +39,7 @@
  * cannot fail and is the exact failure mode this estate keeps finding.
  */
 
+import { randomBytes } from 'node:crypto'
 import type { JourneyContext } from '../journeys.ts'
 import { wait, waitMsFor } from './backoff.ts'
 import {
@@ -75,12 +76,57 @@ export interface FundedAccount {
 }
 
 /**
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE PASSWORD ON EVERY ACCOUNT THIS HARNESS CREATES, GENERATED, NEVER WRITTEN DOWN.**
+ *
+ * This used to be a hard-coded constant, with a comment arguing that a throwaway account guarded
+ * for ninety seconds does not need a secret. Two halves of that were wrong, and micro-org#276
+ * measured both. The literal itself is deliberately not repeated anywhere in this repository —
+ * `deploy/scripts/estate-bootstrap.sh` refuses it by name, and that is the only place that has to
+ * know what it was.
+ *
+ *   * **The constant was in a PUBLIC repository.** It was `micro-deploy`'s default administrator
+ *     password as well, which is how it came to be here at all, and on 2026-08-09 that literal
+ *     really did return 200 from `POST https://api.cloudsforge.online/v1/auth/login` for the
+ *     estate's only operator. Anybody who read the file held it.
+ *   * **The accounts are not gone in ninety seconds.** identity has no account-deletion route a
+ *     monitor may call (`calls.ts` records the same fact), so every account beacon has ever
+ *     registered is still a row on the real estate — thousands of them, on mainnet and testnet,
+ *     each one signed into by one published string. The journey is a throwaway; the ACCOUNT is
+ *     permanent, and the two were being reasoned about as if they were the same thing.
+ *
+ * The argument against generating one — that a random value would end up in a failure message —
+ * does not survive contact with the code either. Nothing here or in `journeys.ts` puts a password
+ * in a message: `journeys.ts` asserts the kept password field by LENGTH for exactly that reason,
+ * and the telemetry redactor drops `password` at any depth (`calls.ts`). `throwaway()` in
+ * `calls.ts` has generated per-run secrets all along; this is the same decision arriving late.
+ *
+ * `randomBytes`, not `Math.random`, and 24 bytes rather than a UUID slice: this is a credential on
+ * a real, reachable, un-deletable account, and the cost of making it unguessable is one line.
+ *
+ * The output satisfies identity's whole policy (`checkPassword`, `contracts/packages/auth`) by
+ * construction: 32 code points, so inside 8..128; base64url over 24 random bytes, so never one
+ * character repeated; and it cannot contain the `bj…` handle or the address's local part, because
+ * those are fourteen or more characters and finding them inside a 32-character random string is
+ * not something that happens. Deriving a password FROM the handle would have tripped that last
+ * rule, which is why nothing here does.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export function syntheticPassword(): string {
+  return randomBytes(24).toString('base64url')
+}
+
+/**
  * A credential nobody else will use, derived from the run.
  *
  * Carried over from `journeys.ts`'s `synthetic()` for its two reasons: the identifier carries the
  * run id so two replicas cannot collide on a handle and turn a passing journey red, and the handle
  * is `[a-z0-9]` only because identity's handle rule is itself under test elsewhere and a fixture
  * that tripped it would assert the wrong refusal.
+ *
+ * The password is NOT derived from the run, and that asymmetry is deliberate: the identifier has
+ * to be reproducible enough to be found and pruned later, and the secret must not be reproducible
+ * at all.
  */
 export function syntheticCredential(ctx: JourneyContext, tag: string): {
   email: string
@@ -91,9 +137,7 @@ export function syntheticCredential(ctx: JourneyContext, tag: string): {
   return {
     email: `bj${tag}${id}@example.test`,
     handle: `bj${tag}${id}`.slice(0, 20),
-    // Long, and constant: it is not a secret — it guards an account that exists for ninety seconds
-    // — and generating one would put a random value in a failure message for no gain.
-    password: 'correct-horse-battery-staple-42',
+    password: syntheticPassword(),
   }
 }
 

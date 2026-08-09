@@ -242,6 +242,38 @@ jobs:
           fi
           echo 'ok: the smoke tier pins a key rather than ignoring certificates'
 
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # THE SMOKE CREDENTIAL HAS NO DEFAULT, AND THIS IS THE CONTROL THAT KEEPS IT THAT WAY.
+      #
+      # BEACON_SMOKE_PASSWORD used to fall back to a literal, in two files.
+      # deploy/scripts/estate-bootstrap.sh defaulted ADMIN_PASSWORD to that same literal and
+      # mainnet was bootstrapped without overriding it, so on 2026-08-09 that string logged in as
+      # the estate's only administrator on https://api.cloudsforge.online and came back with
+      # roles ["player","admin"] — out of a public repository (micro-org #276). The literal is not
+      # repeated here; deploy's bootstrap refuses it by name, which is the one place that has to
+      # know it.
+      #
+      # The defect was not that the default was weak. It was that a default EXISTED for a
+      # credential naming an account somebody else owns, and it survived review because a comment
+      # called the account throwaway — which describes the account's intent and says nothing about
+      # the estate the run is pointed at. So the control is on the SHAPE: no `??` beside this
+      # variable's name anywhere in src/, because the next instance will look exactly like the last
+      # one and will arrive in a diff that is about something else.
+      #
+      # smokeCredentials() in src/browser/smoke.ts is the one reader, and its unit cases run in
+      # every CI build with no estate anywhere. This asserts the same property from outside, so a
+      # change that also edited those cases cannot make it disappear quietly.
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      - name: 'The smoke credential still has no default'
+        run: |
+          if grep -rn 'BEACON_SMOKE_PASSWORD' src/ --include='*.ts' \
+             | grep -vE '^[^:]+:[0-9]+: *(//|\*)' \
+             | grep -F '??'; then
+            echo '::error::a fallback appeared beside BEACON_SMOKE_PASSWORD; that account is the estate administrator'
+            exit 1
+          fi
+          echo 'ok: the smoke credential is read with no default'
+
       - name: 'The CLI still has no --force'
         run: |
           if grep -n "'--force'" src/cli.ts; then
