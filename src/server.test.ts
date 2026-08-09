@@ -454,6 +454,57 @@ describe('the http surface', { skip }, () => {
     assert.equal((await call('/api/alerts/webhook', { method: 'POST', body: {} })).status, 401)
   })
 
+  it('ALERTMANAGER CAN OPEN AN INCIDENT, WHICH MEANS THE TOKEN IS TAKEN AS A BEARER', async () => {
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    // micro-org#311. Alertmanager's `webhook_configs` has `basic_auth`, `authorization` and
+    // `oauth2`, and NO way to set an arbitrary header — so a route that only reads
+    // `x-beacon-token` is a route Alertmanager cannot reach. On mainnet every delivery to this
+    // endpoint failed 401 while `BeaconScrapeFailing` fired correctly for four days.
+    //
+    // The assertion is the incident ROW and not the status code: a 200 from a handler that
+    // authorised and then did nothing would be the same failure with a better colour.
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    const response = await call('/api/alerts/webhook', {
+      method: 'POST',
+      bearer: TOKEN,
+      body: {
+        alerts: [
+          {
+            status: 'firing',
+            labels: { alertname: 'BeaconScrapeFailing', service: 'beacon', severity: 'critical' },
+          },
+        ],
+      },
+    })
+    assert.equal(response.status, 200)
+    const rows = (await sql`select subject from incidents`) as unknown as { subject: string }[]
+    assert.equal(rows[0]?.subject, 'beacon/BeaconScrapeFailing')
+  })
+
+  it('the token presented as a bearer is STILL not an administrator', async () => {
+    // The whole point of the header change is that it moves one credential and no privilege. A
+    // break-glass that could mute a journey would be a shared secret that can silence the thing
+    // watching the estate — and it would arrive in the header a client is most likely to set from
+    // an environment variable by reflex.
+    const response = await call('/v1/journeys/checkout/mute', {
+      method: 'POST',
+      bearer: TOKEN,
+      body: { muted: true, reason: 'a reason long enough to be accepted' },
+    })
+    assert.equal(response.status, 403)
+  })
+
+  it('an EMPTY configured token is not a credential anybody can present', async () => {
+    // `BEACON_TOKEN` interpolates to '' in the estate compose file when it is unset, and the two
+    // header paths must agree that nothing matches nothing. Presented empty, both are absent
+    // headers as far as fetch is concerned, so this asserts the closest reachable case: a caller
+    // sending an empty-looking credential gets 401 and not a service principal.
+    for (const init of [{ token: ' ' }, { bearer: ' ' }] as const) {
+      const response = await call('/api/alerts/webhook', { method: 'POST', body: {}, ...init })
+      assert.equal(response.status, 401, `${JSON.stringify(init)} was accepted`)
+    }
+  })
+
   it('keeps a misspelled severity label rather than dropping the alert', async () => {
     await call('/api/alerts/webhook', {
       method: 'POST',

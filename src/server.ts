@@ -904,6 +904,32 @@ interface AuthOptions {
  * So: the static token satisfies READ, GATE and WRITE, and never `role:admin`. Administrative
  * change to beacon requires an identity that names a person.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
+ *
+ * ── THE SAME CREDENTIAL IS ACCEPTED IN EITHER HEADER (micro-org#311) ──────────────────────────
+ *
+ * `x-beacon-token: <t>` and `Authorization: Bearer <t>` are the same fact and are treated as one.
+ * That is not a convenience: it is the only way Alertmanager can open an incident.
+ *
+ * Alertmanager's `webhook_configs` takes an `http_config` with `basic_auth`, `authorization` and
+ * `oauth2` — and **no way to set an arbitrary header**. Prometheus has `http_headers`;
+ * Alertmanager does not. So a service whose only credential arrives in `x-beacon-token` is a
+ * service Alertmanager cannot authenticate to at all, and mainnet proved it: after the port was
+ * corrected on 2026-08-09 every delivery to this route failed
+ * `notify retry canceled due to unrecoverable error after 1 attempts: unexpected status code 401`,
+ * with `BeaconScrapeFailing` firing correctly and continuously since 2026-08-05 and reaching
+ * nobody for four days.
+ *
+ * **This grants nothing new.** It is one value, already held by exactly the processes that hold
+ * it, arriving in the other header, and it lands on the same `!options.adminOnly` line as before
+ * — so the break-glass still cannot mute a journey or write an SLO however it is presented. The
+ * alternatives considered were minting a service principal for Alertmanager (a second credential
+ * with the same power, and one that expires during exactly the outage it exists for, since
+ * `oauth2` would have to reach identity) and putting a proxy in front of the route (a new process
+ * on the delivery path, which is the path that must work when everything else does not).
+ *
+ * The cost is real and worth naming: an `Authorization` header is copied into more places than a
+ * custom one — proxy logs, client libraries, curl transcripts. The containment is unchanged, and
+ * it is that this token is never an administrator.
  */
 async function authorise(
   ctx: RequestContext,
@@ -911,17 +937,18 @@ async function authorise(
   scope: string,
   options: AuthOptions = {},
 ): Promise<Principal> {
-  const presented = headerOf(ctx.req, 'x-beacon-token')
-  // Timing-safe, because a byte-at-a-time comparison of a shared secret is a byte-at-a-time
-  // forgery oracle: an attacker who can measure it recovers the token one character at a time
-  // without ever knowing it.
+  const bearer = bearerFrom(headerOf(ctx.req, 'authorization'))
   const breakGlass =
-    presented !== undefined && presented !== '' && constantTimeEquals(presented, deps.token)
+    isBreakGlass(headerOf(ctx.req, 'x-beacon-token'), deps.token) ||
+    isBreakGlass(bearer, deps.token)
   if (breakGlass && !options.adminOnly) {
     return { kind: 'service', service: 'beacon-token', scopes: [scope] }
   }
 
-  const token = bearerFrom(headerOf(ctx.req, 'authorization'))
+  // A bearer that IS the break-glass is not an identity token and must not be handed to the
+  // verifier: it would fail signature validation and turn a recognised credential into
+  // `unauthenticated`, which is the wrong answer AND the wrong status code.
+  const token = isBreakGlass(bearer, deps.token) ? null : bearer
   // A missing token takes the same 401 path as a bad one rather than being a separate branch that
   // can drift away from it.
   if (!token) {
@@ -945,6 +972,25 @@ async function authorise(
   if (principal.kind === 'user') return principal
   if (principal.scopes.includes(scope)) return principal
   throw new ForbiddenError(scope)
+}
+
+/**
+ * Is this header value the break-glass credential?
+ *
+ * One function so the two headers cannot drift into two different notions of "matches", which is
+ * exactly the drift that turns a security check into a security hole. The empty string is refused
+ * explicitly: an unset `BEACON_TOKEN` interpolates to `''` in the estate's compose file, and
+ * without this line a caller presenting no credential at all would match a service configured
+ * with no credential at all.
+ */
+function isBreakGlass(presented: string | null | undefined, expected: string): boolean {
+  // `null` as well as `undefined`: `headerOf` answers `undefined` for an absent header and
+  // `bearerFrom` answers `null` for an `Authorization` that is not a bearer. Two spellings of the
+  // same absence, and a check that handled one of them would be a check with a hole in it.
+  if (presented === undefined || presented === null || presented === '' || expected === '') {
+    return false
+  }
+  return constantTimeEquals(presented, expected)
 }
 
 function constantTimeEquals(presented: string, expected: string): boolean {
