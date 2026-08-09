@@ -1150,6 +1150,73 @@ export interface Credentials {
   readonly handle: string
 }
 
+/**
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE SMOKE ACCOUNT IS FIXED AND ITS PASSWORD IS CONFIGURATION. THERE IS NO DEFAULT.**
+ *
+ * `BEACON_SMOKE_PASSWORD` used to fall back to a literal, described in both call sites as a
+ * default rather than a secret because "this account exists only in a dev estate". It did not.
+ * `deploy/scripts/estate-bootstrap.sh` carried the same literal as its `ADMIN_PASSWORD` default
+ * and mainnet was bootstrapped without overriding it, so on 2026-08-09 that string authenticated
+ * `estate-admin@example.test` against
+ * `https://api.cloudsforge.online/v1/auth/login` and returned a token carrying
+ * `roles: ["player","admin"]` — from a PUBLIC repository. micro-org#276 has the measurement, and
+ * micro-deploy#13 rotated it. The rotated value exists only in the host's gitignored
+ * `compose/estate/tokens.env`.
+ *
+ * So the fallback is gone, and it is NOT replaced by a generated secret. This is the one credential
+ * in the browser tier that names an account somebody else created and that must still be there on
+ * the next run: minting a fresh password per run would lock the smoke tier out of the only account
+ * the gated consoles will open for. `fixtures.ts` generates, because the accounts it names it also
+ * creates; this reads, because this one it does not.
+ *
+ * Returned rather than thrown, and shaped exactly like `estateReachable` below, because the two
+ * callers need different things from the same answer: `beacon smoke` turns it into exit 2 ("the
+ * command could not look"), and `smoke.test.ts` turns it into a failed assertion — but only after
+ * it has established that there is an estate to look at, so CI, which has none, still skips.
+ *
+ * Deliberately NOT here: a deny-list refusing the published literal by name. `estate-bootstrap.sh`
+ * refuses it there, at the only point where it could become an account's password again. Copying
+ * the check into this repository would mean writing the published string back into a public
+ * repository in order to guard against the published string, which is the defect wearing the
+ * costume of the fix.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export function smokeCredentials(
+  env: NodeJS.ProcessEnv,
+): { readonly ok: true; readonly credentials: Credentials } | { readonly ok: false; readonly reason: string } {
+  // Read with NO `??` on this line, and that is a shape rather than a preference: CI greps for a
+  // `??` next to this variable's name, because the defect was not a bad default — it was that a
+  // default existed at all, and the next one would arrive looking exactly like the last one.
+  // An exported-but-empty variable counts as unset: `export BEACON_SMOKE_PASSWORD=` in a shell
+  // that lost its tokens.env is the commonest way to arrive here, and signing in with '' would
+  // turn it into a 401 against the product.
+  const password = env['BEACON_SMOKE_PASSWORD']
+  if (password === undefined || password === '') {
+    return {
+      ok: false,
+      reason:
+        'BEACON_SMOKE_PASSWORD is not set, and there is no default. The smoke tier signs in as a ' +
+        'FIXED estate account, so a generated secret would lock it out of that account on the ' +
+        'next run — and the constant that used to be here was published (micro-org#276). The ' +
+        "estate operator's password lives in the host's gitignored compose/estate/tokens.env as " +
+        'ESTATE_ADMIN_PASSWORD; export it as BEACON_SMOKE_PASSWORD, together with ' +
+        'BEACON_SMOKE_IDENTIFIER and BEACON_SMOKE_HANDLE if that account is not the default one.',
+    }
+  }
+  return {
+    ok: true,
+    credentials: {
+      // These two are identifiers, not secrets, and they keep their defaults: they name the
+      // account `estate-bootstrap.sh` creates, and requiring them too would make the ordinary case
+      // three variables to get right instead of one.
+      identifier: env['BEACON_SMOKE_IDENTIFIER'] ?? 'estate-admin@example.test',
+      password,
+      handle: env['BEACON_SMOKE_HANDLE'] ?? 'estateadmin',
+    },
+  }
+}
+
 export interface SignInResult {
   readonly findings: readonly Finding[]
   /** Where the browser ended up. In the message when the assertion fails. */

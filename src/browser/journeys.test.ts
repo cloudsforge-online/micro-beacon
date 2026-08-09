@@ -18,11 +18,14 @@
  */
 
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import test from 'node:test'
+import { checkPassword } from '@cloudsforge/contracts-auth'
 import { T3_SCENARIOS } from './catalogue.ts'
 import { browserAvailable, type BrowserConfig } from './driver.ts'
+import { syntheticPassword } from './fixtures.ts'
 import {
   IMPLEMENTED_IDS,
   SURFACE_KEYS,
@@ -201,6 +204,42 @@ test('the surface keys are keys only — no hostname, port or apex leaks into th
   // maintained by hand in eight places and had already drifted. A ninth copy here would be that
   // mistake made in the repository whose job is to notice drift.
   assert.ok(SURFACE_KEYS.includes('account'), 'the sign-in surface must be nameable in order to be missing')
+})
+
+/* ------------------------------------------------------------------ the synthetic credential */
+
+/*
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE ACCOUNTS THIS TIER REGISTERS ARE REAL, PERMANENT, AND MUST NOT SHARE A PASSWORD.**
+ *
+ * Every browser journey registers against the real identity service, and identity has no deletion
+ * route a monitor may call — so thousands of accounts beacon created are still rows on mainnet and
+ * testnet. Until 2026-08-09 all of them carried one constant that was committed to a PUBLIC
+ * repository (micro-org#276), which made every one of them signable-into by anybody who read it.
+ *
+ * Two properties, and the second is the one a future edit is most likely to break: unpredictable,
+ * and ACCEPTED BY IDENTITY. A generator that satisfied the first and not the second would fail
+ * every journey at its own fixture, which reports as the estate being down.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+test('the synthetic password is different every time it is asked for', () => {
+  const seen = new Set(Array.from({ length: 200 }, () => syntheticPassword()))
+  assert.equal(seen.size, 200, 'two runs got the same password — it is derived from something')
+  // Not a strength score; a floor. base64url over 24 bytes is 32 characters, and anything much
+  // shorter than that arriving here means the generator was swapped for a slice of something.
+  for (const password of seen) assert.ok(password.length >= 32, `${password.length} characters`)
+})
+
+test("the synthetic password satisfies IDENTITY'S OWN policy, asked of identity's own contract", () => {
+  // `checkPassword` from the shared contract, never a copy of its rules: length bounds, the
+  // one-character-repeated rule and — the one that matters here — that a password may not contain
+  // the handle or the email local part. Deriving the secret from the run id, which is what the
+  // identifiers do, would have tripped that last rule.
+  for (let i = 0; i < 200; i += 1) {
+    const handle = `bj${randomUUID().replace(/-/g, '').slice(0, 14)}`
+    const verdict = checkPassword(syntheticPassword(), { handle, email: `${handle}@example.test` })
+    assert.ok(verdict.ok, verdict.ok ? '' : JSON.stringify(verdict.errors))
+  }
 })
 
 /* ------------------------------------------------------------------ surfaceJourney itself */

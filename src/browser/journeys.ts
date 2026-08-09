@@ -80,7 +80,7 @@ import { FORESIGHT_IMPLEMENTATIONS } from './foresightjourneys.ts'
 import { WALLET_IMPLEMENTATIONS } from './walletjourneys.ts'
 import { DASHBOARD_IMPLEMENTATIONS } from './dashboardjourneys.ts'
 import { MEDIA_IMPLEMENTATIONS } from './mediajourneys.ts'
-import type { Operator } from './fixtures.ts'
+import { syntheticPassword, type Operator } from './fixtures.ts'
 
 /**
  * The fifteen surface keys, and nothing else about them.
@@ -255,15 +255,22 @@ export function join(base: string, path: string): string {
  *
  * The handle is `[a-z0-9]` only and 20 characters — identity's own handle rule is the thing under
  * test in BJ-ACC-02, and a fixture that trips it would assert the wrong refusal.
+ *
+ * The password is the one field that is NOT derived from the run. It was a constant here until
+ * 2026-08-09, and that constant was published — micro-org#276 has the measurement. `fixtures.ts`
+ * carries the full reasoning above `syntheticPassword`; the short version is that the JOURNEY is
+ * a throwaway and the ACCOUNT is not, because identity has no deletion route a monitor may call,
+ * so every account this function has ever named is still reachable with whatever it was given.
+ *
+ * Imported rather than spelled a second time: two generators for one rule is two things to get
+ * right, and the one that drifts is the one nobody is reading.
  */
 function synthetic(ctx: JourneyContext): { email: string; handle: string; password: string } {
   const id = ctx.runId.replace(/-/g, '').slice(0, 14)
   return {
     email: `bj-${id}@example.test`,
     handle: `bj${id}`,
-    // Long, and constant: it is not a secret — it guards an account that exists for ninety
-    // seconds — and generating it would put a random value in a failure message for no gain.
-    password: 'correct-horse-battery-staple-42',
+    password: syntheticPassword(),
   }
 }
 
