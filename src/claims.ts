@@ -153,7 +153,8 @@ export const CLAIMS: readonly Claim[] = [
   },
   {
     n: 6,
-    statement: 'One internal economy — Shards and EMBER spend and earn identically in every product.',
+    statement:
+      'One internal economy — EMBER balances spend and earn identically in every product.',
     evidence:
       'A reward earned in a world is spent in Market, in one journey, with both legs visible as ' +
       'ledger postings.',
@@ -162,7 +163,9 @@ export const CLAIMS: readonly Claim[] = [
     gap:
       'There is no client for Ninety Days After and no join-a-world or complete-an-objective path ' +
       'a journey could drive (doc 22 §8.3), so nothing can earn. Spending needs a ledger:post ' +
-      'credential beacon cannot hold — see claim 4.',
+      'credential beacon cannot hold — see claim 4. The statement used to name Shards alongside ' +
+      'EMBER; SHARD is retired and no longer issuable, so naming it here would have had beacon ' +
+      'publishing a live-currency promise about an asset the estate is draining.',
   },
   {
     n: 7,
