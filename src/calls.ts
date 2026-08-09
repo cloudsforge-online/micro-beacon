@@ -136,6 +136,36 @@ export interface Throwaway {
  * hard way.
  *
  *     delete from users where email like 'beacon+%';
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE `.test` IN THAT ADDRESS IS LOAD-BEARING. IT IS NOT A NAMING CONVENTION.**
+ *
+ * Every registration below makes identity emit `identity.email.verification_requested`, and
+ * `notify` turns that into a verification mail. `notify/src/reserved.ts` declines to open the mail
+ * channel for a domain RFC 6761 §6 reserves — `.test`, `.example`, `.invalid`, `.localhost` — so
+ * this address is dropped before a delivery row is written and costs nothing.
+ *
+ * Move it to a domain that could resolve and the estate's outbound mail stops, measurably and
+ * within minutes. The numbers, taken on the estate on 2026-08-07 (micro-org#243): this function
+ * ran ~95 times an hour, the provider's plan allows 250 messages a DAY, `max_attempts` is 6, and
+ * the 250 were gone before anybody was awake. 1,839 sends failed that day against 89 that
+ * succeeded, and 4,483 verification tokens had been issued across the two networks with **zero**
+ * ever consumed. The refusal arrives as `SMTP 535`, which reads as a credentials failure and was
+ * diagnosed as one twice.
+ *
+ * `calls.test.ts` asserts this — on the source of every file here that mints an address, not just
+ * on this line — because the comment is advice and the test is the guarantee.
+ *
+ * **What this costs the probe, stated rather than implied.** These journeys prove that
+ * registration works end to end: identity accepts the account, emits the event, notify maps it to
+ * a notification, and the in-app delivery arrives and is asserted on. They have never proved that
+ * mail LEAVES the estate — nothing here reads a mailbox and no verification token has ever been
+ * consumed by a probe, before this rule or after it. So the reserved domain gave up no assertion.
+ * What it gave up is an accident: while these registrations were spending the allowance, a total
+ * mail failure would eventually have shown up as beacon's own volume drying up. That was never a
+ * check, it was a side effect, and it is replaced by one that does not cost mail —
+ * `notify_deliveries_awaiting_allowance`, which notify publishes for exactly this.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
 export function throwaway(): Throwaway {
   const id = randomUUID().replace(/-/g, '').slice(0, 16)
