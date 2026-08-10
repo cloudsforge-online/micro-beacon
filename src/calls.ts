@@ -284,6 +284,121 @@ export function registerRetryMs(retryAfterHeader: string | null, floorSeconds = 
 }
 
 /**
+ * The long-lived credential this deployment was given, or null when it was given none.
+ *
+ * Read at call time rather than at import, so a test can set it without reloading the module.
+ * `estate-bootstrap.sh` §5b mints it under the name `BEACON_IDENTITY_CREDENTIAL` and
+ * `compose/docker-compose.estate.yml` passes it in under this one; the deploy is where those two
+ * names are joined, and the compose comment says so at length.
+ */
+export function serviceCredential(): string | null {
+  const value = process.env['BEACON_SERVICE_CREDENTIAL']?.trim()
+  return value && value.length > 0 ? value : null
+}
+
+/**
+ * Mint a short-lived service token from that credential, or say there is none to mint from.
+ *
+ * A token rather than an injected one, for the reason `deploy/README.md` records: identity issues
+ * service tokens with a 600-second TTL and nothing re-mints one, so anything holding an injected
+ * token starts answering 401 ten minutes after the estate came up.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE BODY IS EMPTY, AND THAT IS TWO DECISIONS RATHER THAN AN OMISSION.**
+ *
+ * identity's exchange route treats `scopes` as OPTIONAL — `readJson` answers `{}` for an empty
+ * body, and the route's own comment calls that the common case: "a token provider that wants its
+ * whole allowlist for the default lifetime sends nothing at all."
+ *
+ *   1. **This path needs a PRINCIPAL, not a permission.** identity skips the registration
+ *      challenge for a caller whose claims are a service's and consults no scope while doing it
+ *      (`challengeBypass` in `identity/src/server.ts`). Asking for a named scope here would be
+ *      asking for a permission nothing on this path reads.
+ *   2. **A `scopes:` literal here would permanently widen beacon's grant.**
+ *      `deploy/scripts/derive-grants.mjs` reads the `scopes:` body of a
+ *      `POST /service-tokens/exchange` call FROM THE TEXT, and for beacon that seam is its entire
+ *      outbound declaration — see the long note in `ecosystem.ts`. Whatever were written here
+ *      would land in `IDENTITY_SERVICE_TOKEN_GRANTS` and stay there, granted for a request that
+ *      never uses it. The empty body contributes nothing to that seam, which is the correct
+ *      contribution.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export async function mintServiceToken(
+  ctx: JourneyContext,
+  identity: string,
+): Promise<string | null> {
+  const credential = serviceCredential()
+  if (credential === null) return null
+
+  const result = await call(ctx, `${identity}/service-tokens/exchange`, {
+    method: 'POST',
+    // The credential goes in the Authorization header; identity shape-checks its prefix before it
+    // touches the database.
+    token: credential,
+  })
+  ctx.assert(
+    result.status === 201 || result.status === 200,
+    `expected 2xx from /service-tokens/exchange, got ${result.status} — ${result.text.slice(0, 200)}`,
+  )
+  const minted = stringField(result.body, 'token') ?? accessToken(result.body)
+  ctx.assert(minted !== null, 'the exchange returned no token')
+  return minted as string
+}
+
+/**
+ * identity's two 403 challenge refusals, by code — `ChallengeError` in `identity/src/server.ts`.
+ *
+ * `challenge_required` is "nothing was sent"; `challenge_failed` is "something was and it did not
+ * hold". Both are 403 and neither is anything beacon can put right by trying again: nothing in this
+ * process can complete a Turnstile puzzle.
+ *
+ * `challenge_unavailable` is deliberately NOT here. It is 503, it means Cloudflare could not be
+ * reached, and identity fails closed — so it is a state in which no real person can open an account
+ * either. That is a red journey, not a skip, and letting it fall through to the caller's status
+ * assertion is what makes it one.
+ */
+const CHALLENGE_REFUSALS: ReadonlySet<string> = new Set(['challenge_required', 'challenge_failed'])
+
+function challengeRefusal(result: CallResult): string | null {
+  if (result.status !== 403) return null
+  const code = stringField(result.body, 'error', 'code')
+  return code !== null && CHALLENGE_REFUSALS.has(code) ? code : null
+}
+
+/**
+ * Turn a challenge refusal into the right verdict, and hand anything else straight back.
+ *
+ * The two cases are genuinely different and collapsing them would misattribute both:
+ *
+ *   * **No credential.** Beacon was never excused the challenge, so being refused by it is the
+ *     gate working. A `skip` naming the deploy step — never a `fail`, which would open an incident
+ *     against identity for doing exactly what it was configured to do.
+ *   * **A credential, and still refused.** The service-principal bypass is broken. That is a real
+ *     defect and it is identity's, so it fails here with a message that says which of the two it
+ *     is, rather than surfacing as "expected 202, got 403" three frames up.
+ */
+function afterChallenge(ctx: JourneyContext, result: CallResult, token: string | null): CallResult {
+  const code = challengeRefusal(result)
+  if (code === null) return result
+
+  if (token === null) {
+    ctx.skip(
+      `identity requires a solved registration challenge (${code}) and beacon holds no service ` +
+        'credential to be excused it. Set BEACON_IDENTITY_CREDENTIAL on the host — compose passes ' +
+        'it in as BEACON_SERVICE_CREDENTIAL — and this journey registers again. micro-org#361.',
+    )
+  }
+  ctx.assert(
+    false,
+    `identity answered ${code} to a registration presented by a SERVICE PRINCIPAL. The bypass is ` +
+      'the principal and not a header, so this is an expired or revoked credential, or identity no ' +
+      'longer excusing a service token on the register path — neither is fixed by retrying. ' +
+      'micro-org#361.',
+  )
+  return result
+}
+
+/**
  * `POST /auth/register`, waiting out one rate-limit window if identity asks it to.
  *
  * Exactly one retry. Not a loop: a loop would be a journey that keeps trying until its deadline
@@ -292,6 +407,25 @@ export function registerRetryMs(retryAfterHeader: string | null, floorSeconds = 
  *
  * A skip after the retry says so in terms an operator can act on, because "registration is rate
  * limited" was true for ten cycles and told nobody what to do about it.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE CHALLENGE BYPASS IS THE PRINCIPAL. THERE IS NOTHING HERE FOR ANYONE TO COPY.**
+ *
+ * micro-org#361 puts a Cloudflare Turnstile in front of registration, and beacon cannot solve one:
+ * a Turnstile is a proof that a browser did some work, and there is no browser on this path. So
+ * identity excuses a caller who authenticates as a SERVICE — a bearer minted above from a
+ * credential this container holds and nothing else does.
+ *
+ * It is deliberately not a magic header, a shared bypass string or an IP allowlist. Each of those
+ * three is a credential in the ordinary sense and none of them can be kept: a header name and its
+ * value are visible to anything that watches one request, a shared string ships in whatever
+ * artefact holds it, and a source address is spoofable and is shared with every other container on
+ * the network. A bearer expires in ten minutes and is minted per run from a credential that lives
+ * only in the environment of this process.
+ *
+ * A deployment with no challenge is unaffected — the token is presented, and identity's register
+ * route does not care about a bearer it has no reason to look at.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
 export async function registerAccount(
   ctx: JourneyContext,
@@ -299,8 +433,18 @@ export async function registerAccount(
   account: Throwaway,
 ): Promise<CallResult> {
   const body = { email: account.email, handle: account.handle, password: account.password }
-  const first = await call(ctx, `${identity}/auth/register`, { method: 'POST', body })
-  if (first.status !== 429) return first
+  // Minted once and reused across the retry below. The TTL is 600s and the longest this waits is
+  // 62s, so a second mint would buy nothing and cost identity another exchange.
+  const token = await mintServiceToken(ctx, identity)
+  const post = (): Promise<CallResult> =>
+    call(ctx, `${identity}/auth/register`, {
+      method: 'POST',
+      body,
+      ...(token === null ? {} : { token }),
+    })
+
+  const first = await post()
+  if (first.status !== 429) return afterChallenge(ctx, first, token)
 
   const waitMs = registerRetryMs(first.header('retry-after'))
   if (waitMs === 0) {
@@ -315,7 +459,7 @@ export async function registerAccount(
   // throw that is neither an assertion nor a skip as an `error` — Beacon's fault, not the estate's.
   if (ctx.signal.aborted) ctx.skip('the run was abandoned while waiting out a registration limit')
 
-  const second = await call(ctx, `${identity}/auth/register`, { method: 'POST', body })
+  const second = await post()
   if (second.status === 429) {
     ctx.skip(
       `registration is rate limited after waiting ${Math.round(waitMs / 1_000)}s for identity's own ` +
@@ -323,7 +467,7 @@ export async function registerAccount(
         'makes seven registrations against a ceiling of five per minute per address.',
     )
   }
-  return second
+  return afterChallenge(ctx, second, token)
 }
 
 /**

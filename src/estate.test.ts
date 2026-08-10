@@ -25,6 +25,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   ESTATE_REACHABLE,
+  IDENTITY_CHALLENGE,
   IDENTITY_HANDOFF,
   IDENTITY_REGISTER,
   IDENTITY_SIGNIN,
@@ -33,7 +34,7 @@ import {
 } from './estate.ts'
 import { MAX_REGISTER_WAIT_MS, REGISTER_RETRY_MARGIN_MS, registerRetryMs } from './calls.ts'
 import { runJourney, type JourneyDefinition, type JourneyRun } from './journeys.ts'
-import { fakeEstate, type FakeEstate, type FakeHandler } from './testsupport.ts'
+import { fakeEstate, type FakeEstate, type FakeHandler, type FakeRequest } from './testsupport.ts'
 
 /**
  * The healthy registration handler, so a test can refuse the first attempt and then delegate.
@@ -143,6 +144,15 @@ async function healthyEstate(): Promise<FakeEstate> {
     codes.set(code, { ...entry, used: true })
     return { status: 200, body: { accessToken: issue(entry.account), refreshToken: 'r', expiresIn: 900, user: { id: entry.account.id, handle: entry.account.handle } } }
   })
+
+  // A deployment with no Turnstile account — every developer machine, CI, and the estate until the
+  // secret and the site key are put on the host. `identity/src/env.ts` decides `required` from
+  // whether it holds BOTH, so this is the answer the fake estate gives and the challenged variant
+  // below is what overrides it. micro-org#361.
+  estate.route('GET /auth/challenge', () => ({
+    status: 200,
+    body: { required: false, provider: 'turnstile', siteKey: null, action: 'signup' },
+  }))
 
   estate.route('GET /v1/listings', () => ({ status: 200, body: { listings: [] } }))
   estate.route('GET /v1/collections', () => ({ status: 200, body: { collections: [] } }))
@@ -505,4 +515,363 @@ test('estate.reachable skips a service this deployment has no address for', asyn
   } finally {
     await estate.close()
   }
+})
+
+/* --------------------------------------- the registration challenge, and the principal bypass */
+
+/**
+ * micro-org#361: a Cloudflare Turnstile in front of `POST /auth/register`.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE FAKE ESTATE HAS TO BE ABLE TO REFUSE, OR NONE OF THIS PROVES ANYTHING.**
+ *
+ * The bypass is the whole risk here. Every journey that registers now presents a service bearer,
+ * so a fake whose `/auth/register` ignored the Authorization header would let all of them pass
+ * against a gate that was never there — the "check that cannot fail" this estate keeps shipping
+ * (micro-org#355, #356). `challenged()` therefore models identity's actual rule: a token MINTED BY
+ * THE EXCHANGE gets in, and a request with no bearer, with the long-lived credential itself, or
+ * with any other string does not.
+ *
+ * The shapes are read off `identity/src/server.ts` — the 403 codes from `ChallengeError`, the
+ * `{ required, provider, siteKey, action }` body of `GET /auth/challenge`, and the `{ token }` the
+ * exchange answers with.
+ *
+ * NOTHING IN HERE IS A REAL CREDENTIAL OR A REAL SITE KEY. Both strings are this file's own
+ * inventions; the secret that redeems a Turnstile token exists only on the mainnet host and is
+ * never needed by, or present in, any beacon test.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+
+const CREDENTIAL = 'cfsc_this_is_not_a_real_credential_it_lives_only_in_this_file'
+const SITE_KEY = '0xTESTKEYnotTheRealOne'
+
+/** Put a challenge in front of registration, and an exchange that mints the one way past it. */
+function challenged(
+  estate: FakeEstate,
+  options: { siteKey?: string | null } = {},
+): { readonly minted: readonly string[] } {
+  const minted: string[] = []
+  const register = registerHandlerOf(estate)
+
+  estate.route('GET /auth/challenge', () => ({
+    status: 200,
+    body: {
+      required: true,
+      provider: 'turnstile',
+      siteKey: options.siteKey === undefined ? SITE_KEY : options.siteKey,
+      action: 'signup',
+    },
+  }))
+
+  estate.route('POST /service-tokens/exchange', (req) => {
+    if ((req.headers['authorization'] ?? '') !== `Bearer ${CREDENTIAL}`) {
+      return { status: 401, body: { error: { code: 'unauthenticated' } } }
+    }
+    const token = `svc_${minted.length + 1}`
+    minted.push(token)
+    return { status: 201, body: { token, expiresIn: 600 } }
+  })
+
+  estate.route('POST /auth/register', (req) => {
+    const header = req.headers['authorization'] ?? ''
+    const bearer = header.startsWith('Bearer ') ? header.slice(7) : ''
+    // The PRINCIPAL, not a header and not a string anybody can carry. `minted` holds only tokens
+    // this exchange issued in this run, so presenting the credential itself — the mistake that
+    // would leak a long-lived secret onto a public route — is refused here exactly as identity
+    // refuses it.
+    if (!minted.includes(bearer)) {
+      return {
+        status: 403,
+        body: {
+          error: {
+            code: 'challenge_required',
+            message: 'that registration did not carry a completed challenge',
+          },
+        },
+      }
+    }
+    return register(req)
+  })
+
+  return { minted }
+}
+
+async function withCredential(body: () => Promise<void>): Promise<void> {
+  process.env['BEACON_SERVICE_CREDENTIAL'] = CREDENTIAL
+  try {
+    await body()
+  } finally {
+    delete process.env['BEACON_SERVICE_CREDENTIAL']
+  }
+}
+
+const requestsTo = (estate: FakeEstate, key: string): readonly FakeRequest[] =>
+  estate.requests.filter((r) => `${r.method} ${r.path}` === key)
+
+test('identity.registration-challenge passes when an unchallenged registration is refused', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    assert.equal(result.status, 'pass', String(result.error))
+
+    // AND IT SENT NO CREDENTIAL. A journey that quietly acquired the bypass would report the gate
+    // working while proving only that the bypass works, which is the one thing every OTHER journey
+    // already proves.
+    const posted = requestsTo(estate, 'POST /auth/register')
+    assert.equal(posted.length, 1)
+    assert.equal(posted[0]?.headers['authorization'], undefined,
+      'the journey that exists to be refused presented a bearer')
+  })
+})
+
+test('identity.registration-challenge goes red when the gate lets an unchallenged caller through', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    // The regression this journey exists for, and the only one that matters: a gate that is on
+    // paper and open in fact. Every other journey would still be green here.
+    estate.route('POST /auth/register', () => ({
+      status: 202,
+      body: { verificationRequired: true, email: 'whoever@example.test' },
+    }))
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    assertFailedAt(result, 'a registration carrying no challenge token is refused')
+  })
+})
+
+test('identity.registration-challenge goes red when the refusal names the offending field', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    // Validation ran before the gate. The status and the code are both right and the route is an
+    // existence oracle again: a 400 naming `handle` says whether a handle is taken, to somebody
+    // who solved nothing.
+    estate.route('POST /auth/register', () => ({
+      status: 403,
+      body: {
+        error: { code: 'challenge_required', message: 'no' },
+        fields: [{ field: 'handle', message: 'that handle is taken' }],
+      },
+    }))
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    assertFailedAt(result, 'a registration carrying no challenge token is refused')
+  })
+})
+
+test('identity.registration-challenge goes red when a required challenge publishes no site key', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate, { siteKey: null })
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    // A form nobody can complete. It fails at the FIRST step, because the second one would still
+    // pass: a browser that cannot render a widget sends no token, and identity refuses it exactly
+    // as it refuses a bot.
+    assertFailedAt(result, 'identity publishes whether registration is challenged')
+  })
+})
+
+test('identity.registration-challenge skips, and registers NOTHING, where there is no challenge', async () => {
+  await withEstate(async (estate) => {
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    assert.equal(result.status, 'skip', String(result.error))
+    // ── THE MAIL QUOTA. ──────────────────────────────────────────────────────────────────────
+    // On a deployment with no challenge this journey's own request would SUCCEED, creating an
+    // account and costing one of the 250 sends a day the plan allows (micro-org#243). It must
+    // therefore not be made at all, and this is the assertion that says so.
+    assert.deepEqual(requestsTo(estate, 'POST /auth/register'), [],
+      'a deployment with no challenge was registered against to prove a gate it does not have')
+  })
+})
+
+test('identity.registration-challenge skips against an identity that predates the challenge route', async () => {
+  await withEstate(async (estate) => {
+    estate.route('GET /auth/challenge', () => ({ status: 404, body: { error: { code: 'not_found' } } }))
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    assert.equal(result.status, 'skip', String(result.error))
+    assert.deepEqual(requestsTo(estate, 'POST /auth/register'), [])
+  })
+})
+
+test('a registering journey presents a MINTED service token, and gets past the gate with it', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    await withCredential(async () => {
+      const result = await run(IDENTITY_REGISTER, estate)
+      assert.equal(result.status, 'pass', String(result.error))
+
+      const exchanges = requestsTo(estate, 'POST /service-tokens/exchange')
+      assert.equal(exchanges.length, 1, 'the token was not minted exactly once per registration')
+      // No `scopes`, deliberately: identity reads an empty body as "the whole allowlist", and a
+      // literal here would be read by `deploy/scripts/derive-grants.mjs` as an outbound scope
+      // declaration and granted for ever. See `mintServiceToken`.
+      assert.deepEqual(exchanges[0]?.body, {}, 'the exchange asked for a named scope')
+
+      const posted = requestsTo(estate, 'POST /auth/register')
+      assert.equal(posted[0]?.headers['authorization'], 'Bearer svc_1',
+        'the registration did not carry the token the exchange minted')
+    })
+  })
+})
+
+test('the long-lived credential reaches the exchange AND NOTHING ELSE', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    await withCredential(async () => {
+      const result = await run(IDENTITY_REGISTER, estate)
+      assert.equal(result.status, 'pass', String(result.error))
+
+      // The credential does not expire and is the only thing that mints tokens. Sent to any other
+      // route it is a long-lived secret on a surface that did not need one — the exact failure the
+      // 600-second minted token exists to avoid.
+      const carrying = estate.requests
+        .filter((r) => r.raw.includes(CREDENTIAL) || (r.headers['authorization'] ?? '').includes(CREDENTIAL))
+        .map((r) => `${r.method} ${r.path}`)
+      assert.deepEqual(carrying, ['POST /service-tokens/exchange'],
+        'the long-lived credential was presented somewhere other than the exchange')
+    })
+  })
+})
+
+test('a registering journey SKIPS, rather than failing, when it holds no credential to be excused with', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    // No credential in the environment: `withCredential` is deliberately not used.
+    const result = await run(IDENTITY_REGISTER, estate)
+    // The gate refusing a caller who solved nothing is the gate WORKING. Reporting it as a failure
+    // would open an incident against identity for doing what it was configured to do — and the
+    // reason names the variable an operator sets to fix it.
+    assert.equal(result.status, 'skip', String(result.error))
+    assert.match(String(result.error), /BEACON_IDENTITY_CREDENTIAL/)
+    assert.deepEqual(requestsTo(estate, 'POST /service-tokens/exchange'), [],
+      'an exchange was attempted with no credential to exchange')
+  })
+})
+
+test('a registering journey goes RED when a service principal is refused too', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    // The bypass itself is broken: a credential exists, a token was minted, and identity refused
+    // it anyway. Nothing a retry fixes, and it must not read as "registration is challenged" —
+    // that would be a skip, and a skip here would hide the estate's registration being shut.
+    estate.route('POST /auth/register', () => ({
+      status: 403,
+      body: { error: { code: 'challenge_failed', message: 'that registration challenge was not accepted' } },
+    }))
+    await withCredential(async () => {
+      const result = await run(IDENTITY_REGISTER, estate)
+      assertFailedAt(result, 'register')
+      assert.match(String(result.error), /SERVICE PRINCIPAL/)
+    })
+  })
+})
+
+test('a deployment with no challenge is registered against exactly as it was before', async () => {
+  await withEstate(async (estate) => {
+    const result = await run(IDENTITY_REGISTER, estate)
+    assert.equal(result.status, 'pass', String(result.error))
+    // No credential, no challenge: not one extra request, and not one extra header. The feature
+    // being off has to leave this path byte-for-byte as it was.
+    assert.deepEqual(requestsTo(estate, 'POST /service-tokens/exchange'), [])
+    const posted = requestsTo(estate, 'POST /auth/register')
+    assert.equal(posted.length, 1)
+    assert.equal(posted[0]?.headers['authorization'], undefined)
+  })
+})
+
+test('identity.registration-challenge goes red when the 403 is some OTHER refusal', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    // 403, and nothing to do with a challenge. If the journey accepted any 403 it would report the
+    // gate proven while registration was in fact shut for a completely different reason — a green
+    // that means "something said no", which is not what this journey claims to have found out.
+    estate.route('POST /auth/register', () => ({
+      status: 403,
+      body: { error: { code: 'forbidden', message: 'registration is closed' } },
+    }))
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    assertFailedAt(result, 'a registration carrying no challenge token is refused')
+  })
+})
+
+test('identity.registration-challenge goes red when /auth/challenge answers without `required`', async () => {
+  await withEstate(async (estate) => {
+    // The shape changed and the flag went missing. Read as "not required" this journey would skip
+    // for ever, which is the worst outcome available: the gate stops being measured and the board
+    // says so in a colour nobody reads.
+    estate.route('GET /auth/challenge', () => ({
+      status: 200,
+      body: { provider: 'turnstile', siteKey: SITE_KEY, action: 'signup' },
+    }))
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    assertFailedAt(result, 'identity publishes whether registration is challenged')
+  })
+})
+
+test('a Turnstile OUTAGE fails the registering journey, and is never mistaken for a refusal', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    // identity fails closed when it cannot reach `siteverify` (503 `challenge_unavailable`), which
+    // means NOBODY can register — a real, total outage of the estate's front door. It arrives on
+    // the same route, in the same envelope, as the 403 a bot gets, and the temptation is to file it
+    // with the other challenge codes and skip. That would be the outage's perfect hiding place: a
+    // skip is not a page. Only the two 403 codes are refusals; this one is left to the caller's own
+    // status assertion and goes red.
+    estate.route('POST /auth/register', () => ({
+      status: 503,
+      body: { error: { code: 'challenge_unavailable', message: 'the challenge provider could not be reached' } },
+    }))
+    await withCredential(async () => {
+      const result = await run(IDENTITY_REGISTER, estate)
+      assertFailedAt(result, 'register')
+      assert.doesNotMatch(String(result.error), /SERVICE PRINCIPAL/,
+        'an outage was reported as the service bypass being broken')
+    })
+  })
+})
+
+test('identity.registration-challenge goes red when registration is refused by something that is not the gate', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    // A 500. The journey's claim is precise — "the gate refused a caller who solved nothing" — and
+    // any-4xx-or-worse would let a broken route stand in for the gate and report it proven. Half of
+    // this estate's registration failures have been 500s from a wedged upstream, so this is not a
+    // hypothetical status to be tolerant about.
+    estate.route('POST /auth/register', () => ({
+      status: 500,
+      body: { error: { code: 'internal_error', message: 'no' } },
+    }))
+    const result = await run(IDENTITY_CHALLENGE, estate)
+    assertFailedAt(result, 'a registration carrying no challenge token is refused')
+    // AND IT SAYS THE STATUS WAS WRONG. Red is not enough here, because a tolerant status check
+    // (`>= 400`) still goes red — on the CODE — and hands the reader "expected the refusal code
+    // challenge_required, got internal_error", which reads as a bug in identity's challenge and
+    // sends whoever is on call into the wrong file. The route is simply down.
+    assert.match(String(result.error), /not 403/,
+      'a 500 was reported as a challenge-code mismatch rather than as the wrong status')
+  })
+})
+
+test('the RETRY after a rate limit carries the bearer too', async () => {
+  await withEstate(async (estate) => {
+    challenged(estate)
+    await withCredential(async () => {
+      // The first attempt is refused with identity's own `retry-after`; the second must be the
+      // same request. It was not, before micro-org#361: the retry was a second literal `call` with
+      // its own body and no token, so the bypass would have applied to the first attempt only and
+      // every rate-limited cycle would have reported registration broken.
+      const gated = registerHandlerOf(estate)
+      let attempts = 0
+      estate.route('POST /auth/register', (req) => {
+        attempts += 1
+        if (attempts === 1) {
+          return { status: 429, headers: { 'retry-after': '1' }, body: { error: { code: 'too_many_requests' } } }
+        }
+        return gated(req)
+      })
+
+      const result = await run(IDENTITY_REGISTER, estate)
+      assert.equal(result.status, 'pass', String(result.error))
+      const posted = requestsTo(estate, 'POST /auth/register')
+      assert.equal(posted.length, 2)
+      assert.equal(posted[1]?.headers['authorization'], 'Bearer svc_1',
+        'the retry was sent without the service bearer the first attempt carried')
+    })
+  })
 })

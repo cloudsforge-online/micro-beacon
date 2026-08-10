@@ -77,7 +77,7 @@
  * line number was standing in for, done in a way that cannot rot.
  */
 
-import { accessToken, call, registerAccount, stringField, throwaway } from './calls.ts'
+import { accessToken, call, field, registerAccount, stringField, throwaway } from './calls.ts'
 import { GROUPS } from './groups.ts'
 import { ecosystemJourneys } from './ecosystem.ts'
 import type { JourneyContext, JourneyDefinition } from './journeys.ts'
@@ -293,6 +293,126 @@ export const IDENTITY_HANDOFF: JourneyDefinition = {
   },
 }
 
+/**
+ * The registration challenge REFUSES somebody who did not solve it.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **EVERY OTHER JOURNEY THAT REGISTERS IS EXCUSED THE CHALLENGE, SO SOMETHING HAS TO NOT BE.**
+ *
+ * micro-org#361 put a Cloudflare Turnstile in front of `POST /auth/register`, and `registerAccount`
+ * gets past it by authenticating as a service principal. That is correct — beacon has no browser
+ * and cannot solve a puzzle — and it means the four journeys that register would go on passing
+ * word for word if the gate were deleted tomorrow. A control that only ever runs in bypass is a
+ * control nobody is watching, which is the defect class micro-org#355 and #356 are both instances
+ * of. This journey is the other half: it presents NO credential, and asserts the refusal.
+ *
+ * ── IT COSTS NO MAIL, AND THAT IS LOAD-BEARING ────────────────────────────────────────────────
+ *
+ * The mail plan allows 250 sends a day and beacon's own registrations have exhausted it before
+ * (micro-org#243; `calls.test.ts` carries the arithmetic). A REFUSED registration creates no
+ * account, emits no `identity.email.verification_requested`, and therefore sends nothing — the
+ * challenge is taken before anything is created, which `identity/src/server.ts` says in the
+ * comment above `runRegistrationChallenge`. The skip below is what keeps that true: on a
+ * deployment with no challenge this same request would SUCCEED, and a journey that registered a
+ * real throwaway account on every cycle to prove a gate that is not there would cost a mail each
+ * time to learn nothing.
+ *
+ * ── WHY IT IS DECLARED UNCONDITIONALLY, AND NON-CRITICAL ──────────────────────────────────────
+ *
+ * `ecosystem.trial-balance` sets the precedent for a journey that is ABSENT rather than declared
+ * and skipping, and it can be: its condition is a variable in beacon's own environment, readable
+ * at import. This one's condition is not. Whether registration is challenged is a property of
+ * IDENTITY's configuration, published at runtime by `GET /auth/challenge`, and beacon cannot know
+ * it without asking. A second copy of the answer in beacon's environment would be exactly the
+ * "second notion of the same fact" this change was written to avoid — two settings that can
+ * disagree, with the disagreement showing up as a monitor that lies.
+ *
+ * So it is declared always and `critical: false`. A skip on a deployment with no challenge is then
+ * honest and costs nothing: `collectReasons` in `gate.ts` skips over a non-critical journey
+ * entirely, so this cannot refuse a release for being inapplicable — while a real 202 where a 403
+ * was due is a `fail`, on the board, at the named step.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export const IDENTITY_CHALLENGE: JourneyDefinition = {
+  name: 'identity.registration-challenge',
+  title: 'A registration nobody solved the challenge for is refused',
+  productGroup: GROUPS.account,
+  service: 'identity',
+  critical: false,
+  async run(ctx) {
+    const identity = ctx.target('identity')
+
+    await ctx.step('identity publishes whether registration is challenged', async () => {
+      // No token, deliberately: this route is read by somebody who has no account yet, so a
+      // credential being needed here would be a defect in itself.
+      const result = await call(ctx, `${identity}/auth/challenge`)
+      if (result.status === 404) {
+        ctx.skip('this identity predates micro-org#361 and has no GET /auth/challenge')
+      }
+      ctx.assert(result.status === 200, `expected 200 from /auth/challenge, got ${result.status}`)
+
+      const required = field(result.body, 'required')
+      // `=== true`, never `!== false`. An answer that lost the field must not read as challenged:
+      // this journey would then assert a 403 that nothing was ever going to send, and report
+      // identity broken for a response it never made.
+      ctx.assert(typeof required === 'boolean', '/auth/challenge answered without a `required` flag')
+      if (required !== true) {
+        ctx.skip('this deployment has no registration challenge configured, so there is no gate here to prove')
+      }
+
+      // A required challenge with no site key is a form nobody can complete: hub-web has nothing
+      // to render the widget with, so every human registration fails — and no automated one
+      // notices, because they are all excused. Asserted here rather than left to the browser tier,
+      // which does not run in every deployment.
+      const siteKey = stringField(result.body, 'siteKey')
+      ctx.assert(
+        siteKey !== null && siteKey !== '',
+        'identity says a challenge is required and published no site key to render it with, so no ' +
+          'browser can produce a token and nobody can open an account',
+      )
+    })
+
+    await ctx.step('a registration carrying no challenge token is refused', async () => {
+      const account = throwaway()
+      const result = await call(ctx, `${identity}/auth/register`, {
+        method: 'POST',
+        // NO `token`, and that is the entire scenario. `registerAccount` is not used here for the
+        // same reason — it presents a service bearer, which is precisely what must be absent.
+        body: { email: account.email, handle: account.handle, password: account.password },
+      })
+      if (result.status === 429) ctx.skip('registration is rate limited')
+
+      ctx.assert(
+        result.status !== 503,
+        'identity answered 503: the challenge could not be checked at all, and it fails closed, so ' +
+          'nobody can open an account right now. That is an outage of the challenge and not a ' +
+          'finding about this gate',
+      )
+      ctx.assert(
+        result.status === 403,
+        `an unchallenged registration was answered ${result.status}, not 403. A 202 means the gate ` +
+          'is open and every bot in the world may open accounts; anything else means it refused ' +
+          'for some other reason and this journey has stopped proving what it says it proves',
+      )
+      // The CODE, not just the status. identity separates "nothing was sent" from "something was
+      // sent and did not hold" (`ChallengeError`), and this journey sent nothing — reading
+      // `challenge_failed` here would mean identity found a token in a request that carried none.
+      const code = stringField(result.body, 'error', 'code')
+      ctx.assert(
+        code === 'challenge_required',
+        `expected the refusal code challenge_required, got ${String(code)}`,
+      )
+      // And nothing leaked out on the way. The gate runs before validation exactly so that this
+      // route cannot be used to ask whether an address or a handle is taken.
+      ctx.assert(
+        field(result.body, 'fields') === undefined,
+        'the refusal carried field-level detail, so validation ran before the gate did and this ' +
+          'route is an existence oracle again',
+      )
+    })
+  },
+}
+
 export const MARKET_CATALOGUE: JourneyDefinition = {
   name: 'market.catalogue',
   title: 'The market catalogue can be read',
@@ -390,11 +510,14 @@ export const ESTATE_SERVICES: readonly string[] = [
   'custody',
 ]
 
-/** The six per-service journeys, before the cross-service ones are added. */
+/** The per-service journeys, before the cross-service ones are added. */
 export const SERVICE_JOURNEYS: readonly JourneyDefinition[] = [
   IDENTITY_REGISTER,
   IDENTITY_SIGNIN,
   IDENTITY_HANDOFF,
+  // The only journey in this list that is not excused the registration challenge, and the only
+  // reason the other three prove anything about it. micro-org#361.
+  IDENTITY_CHALLENGE,
   MARKET_CATALOGUE,
   WORLDS_REGISTRY,
   ESTATE_REACHABLE,
