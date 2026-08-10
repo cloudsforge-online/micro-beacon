@@ -42,11 +42,16 @@
  *
  * `ecosystem.trial-balance` is the one conditional case, and it is conditional on a **credential**
  * rather than on a missing feature: `ECOSYSTEM_JOURNEYS` includes it only when
- * `BEACON_SERVICE_CREDENTIAL` is set. Beacon cannot hold one today —
- * `IDENTITY_SERVICE_TOKEN_GRANTS` in `deploy/compose/docker-compose.estate.yml` names thirteen
- * services and `beacon` is not among them, so `POST /service-credentials` answers 500 with "no
- * scopes are configured for service 'beacon'". That is a deploy change, not a code change, and the
- * journey is written and tested so that granting it is the only remaining step.
+ * `BEACON_SERVICE_CREDENTIAL` is set.
+ *
+ * That paragraph used to end "Beacon cannot hold one today — `IDENTITY_SERVICE_TOKEN_GRANTS` names
+ * thirteen services and `beacon` is not among them". **It does now**, and the deploy step it was
+ * waiting for has happened: the map in `deploy/compose/docker-compose.estate.yml` carries
+ * `"beacon":["ledger:read"]` — derived, not hand-written, from the `scopes:` literal below — and
+ * the beacon service block passes `BEACON_SERVICE_CREDENTIAL: ${BEACON_IDENTITY_CREDENTIAL:-}`.
+ * Corrected 2026-08-10, while adding the service-token bypass for micro-org#361, which reads the
+ * same credential through `serviceCredential()` in `calls.ts` and would have been designed around
+ * a blocker that no longer exists.
  *
  * ## Every route below was read out of the service that serves it
  *
@@ -67,7 +72,16 @@
  * falsifies, asserted from a repository that cannot see the file at all.
  */
 
-import { accessToken, call, field, pollFor, registerThrowaway, stringField, type Json } from './calls.ts'
+import {
+  accessToken,
+  call,
+  field,
+  pollFor,
+  registerThrowaway,
+  serviceCredential,
+  stringField,
+  type Json,
+} from './calls.ts'
 import { GROUPS } from './groups.ts'
 import type { JourneyContext, JourneyDefinition } from './journeys.ts'
 import type { LiveScope } from '@cloudsforge/contracts-auth'
@@ -952,12 +966,6 @@ export const ECOSYSTEM_DEPOSIT_ADDRESS: JourneyDefinition = {
 }
 
 /* ------------------------------------------------------------------ the registry */
-
-/** Read at call time rather than at import, so a test can set it without reloading the module. */
-function serviceCredential(): string | null {
-  const value = process.env['BEACON_SERVICE_CREDENTIAL']?.trim()
-  return value && value.length > 0 ? value : null
-}
 
 /**
  * The ecosystem journeys this build declares.
