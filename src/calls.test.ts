@@ -237,3 +237,88 @@ test('the SESSION_FIELDS table covers both shapes accessToken() reads', () => {
   assert.ok(paths.includes('accessToken'))
   assert.ok(paths.includes('tokens.accessToken'))
 })
+
+/* ------------------------------------------------------------- the prune predicate */
+
+/**
+ * The prune's LIKE pattern, read out of the SQL file itself.
+ *
+ * Not re-typed here. A copy in this file would be a second claim about the same thing, and the
+ * whole point of the next two tests is that there is exactly one.
+ */
+async function prunePattern(): Promise<string> {
+  const sql = await readFile(join(HERE, '..', 'scripts', 'prune-beacon-residue.sql'), 'utf8')
+  const matches = [...sql.matchAll(/like '([^']+)'/g)].map((m) => m[1]!)
+  const distinct = [...new Set(matches.filter((p) => p.includes('beacon')))]
+  assert.equal(
+    distinct.length,
+    1,
+    `the prune must use ONE pattern throughout; found ${distinct.length}: ${distinct.join(', ')}`,
+  )
+  return distinct[0]!
+}
+
+/** Postgres `LIKE`, for the two wildcards this pattern uses. */
+function likeMatches(pattern: string, value: string): boolean {
+  const rx = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.')
+  return new RegExp(`^${rx}$`).test(value)
+}
+
+test('the prune pattern matches what throwaway() actually mints', async () => {
+  // ── THE COUPLING NOTHING ELSE HOLDS ──────────────────────────────────────────────────────────
+  //
+  // `throwaway()` writes the rows and `prune-beacon-residue.sql` deletes them, and they live in
+  // different languages in different directories with no compiler between them. A rename on either
+  // side is silent: the prune finds nothing and reports success, which is the "check that cannot
+  // fail" shape micro-org#38 rosters twenty-two of.
+  const pattern = await prunePattern()
+  for (let i = 0; i < 200; i++) {
+    const account = throwaway()
+    assert.ok(
+      likeMatches(pattern, account.email),
+      `throwaway() minted ${account.email}, which '${pattern}' does not match`,
+    )
+  }
+})
+
+test('the prune pattern does not match a real person who plus-addresses', async () => {
+  // micro-org#390 proposed `beacon+%`. That is the dangerous half-right: it matches every address
+  // this harness mints AND every address of a real user who plus-addressed their own — which gmail
+  // hands out by default, so `beacon+shopping@gmail.com` is a person's mail, not residue.
+  //
+  // The domain is the load-bearing half of the pattern and this is what says so.
+  const pattern = await prunePattern()
+  for (const address of [
+    'beacon+shopping@gmail.com',
+    'beacon+news@yahoo.gr',
+    'beacon@beacon.test.example.com',
+    'someone@beacon.test.attacker.com',
+    'notbeacon+1@beacon.test',
+  ]) {
+    assert.ok(!likeMatches(pattern, address), `'${pattern}' would have deleted ${address}`)
+  }
+})
+
+test('the prune names only tables and columns that identity and notify really have', async () => {
+  // The first draft of this file named FOUR objects that do not exist — `channel_target_id`,
+  // `email_verifications`, `password_resets`, `organisation_memberships` — and its first statement
+  // would have failed against the live schema. Beacon cannot see those schemas, so this cannot
+  // check the names; what it CAN do is refuse the four that were already got wrong, so the same
+  // mistake cannot be reintroduced by somebody working from the same memory.
+  const sql = await readFile(join(HERE, '..', 'scripts', 'prune-beacon-residue.sql'), 'utf8')
+  const statements = sql
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+  for (const wrong of [
+    'channel_target_id',
+    'email_verifications',
+    'password_resets',
+    'organisation_memberships',
+  ]) {
+    assert.ok(
+      !statements.includes(wrong),
+      `the prune names '${wrong}', which does not exist on the live schema`,
+    )
+  }
+})
