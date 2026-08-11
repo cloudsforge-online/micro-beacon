@@ -702,7 +702,17 @@ async function runSloSeed(rest: readonly string[], env: NodeJS.ProcessEnv): Prom
     return 2
   }
 
-  const { catalogue, plan, registeredNames, seed, SloSeedError } = await import('./sloseed.ts')
+  const {
+    AVAILABILITY_OBJECTIVES,
+    catalogue,
+    OBJECTIVES,
+    plan,
+    planAvailability,
+    probeTargets,
+    registeredNames,
+    seed,
+    SloSeedError,
+  } = await import('./sloseed.ts')
 
   let planned
   try {
@@ -710,17 +720,26 @@ async function runSloSeed(rest: readonly string[], env: NodeJS.ProcessEnv): Prom
     // first of those is not an import: `ecosystemJourneys()` reads `process.env` at import time,
     // so importing the registry here would seed a different table from inside the container than
     // from a shell — and `--dry-run` would show numbers that are not the ones that get written.
-    const registered = args.dryRun
-      ? Object.keys((await import('./sloseed.ts')).OBJECTIVES)
-      : await registeredNames(args.url, args.headers)
-    planned = plan(await catalogue(), registered)
+    const [registered, targets] = args.dryRun
+      ? [Object.keys(OBJECTIVES), Object.keys(AVAILABILITY_OBJECTIVES)]
+      : await Promise.all([
+          registeredNames(args.url, args.headers),
+          probeTargets(args.url, args.headers),
+        ])
+    const journeys = plan(await catalogue(), registered)
+    const availability = planAvailability(targets)
+    planned = {
+      // Journeys first, then availability, so the output reads in the order the two halves were
+      // added to the estate and an operator comparing two runs sees a stable list.
+      slos: [...journeys.slos, ...availability.slos],
+      refusals: [...journeys.refusals, ...availability.refusals],
+    }
   } catch (err) {
-    // A journey with no objective is not something to seed around. See `MISSING_IS_AN_ERROR`.
     stderr.write(`${err instanceof SloSeedError ? err.message : String(err)}\n`)
     return 2
   }
 
-  for (const slo of planned) {
+  for (const slo of planned.slos) {
     const pct = (Number(slo.objectivePpm) / 10_000).toFixed(2)
     stdout.write(
       `  ${slo.name.padEnd(32)} ${slo.service.padEnd(10)} tier ${slo.tier}  ` +
@@ -729,17 +748,45 @@ async function runSloSeed(rest: readonly string[], env: NodeJS.ProcessEnv): Prom
   }
 
   if (args.dryRun) {
-    stdout.write(`\n${planned.length} objectives planned — nothing was written\n`)
-    return 0
+    stdout.write(`\n${planned.slos.length} objectives planned — nothing was written\n`)
+    // The refusals are printed under `--dry-run` too, and the exit code carries them. `--dry-run`
+    // is how the plan is reviewed before a deploy, so a review that showed only the rows that WILL
+    // be written would hide exactly the thing that needs a decision.
+    return reportRefusals(planned.refusals)
   }
 
-  const results = await seed(planned, { baseUrl: args.url, headers: args.headers })
+  const results = await seed(planned.slos, { baseUrl: args.url, headers: args.headers })
   const failed = results.filter((result) => !result.ok)
   stdout.write(`\n${results.length - failed.length}/${results.length} registered\n`)
   for (const result of failed) {
     stderr.write(`  FAILED ${result.name} — HTTP ${result.status} ${result.error ?? ''}\n`)
   }
-  return failed.length === 0 ? 0 : 1
+  if (failed.length > 0) return 1
+  return reportRefusals(planned.refusals)
+}
+
+/**
+ * Print what nobody has ruled on, and make the command fail for it.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THIS EXIT CODE IS WHAT IS LEFT OF `MISSING_IS_AN_ERROR`, AND IT IS THE HALF WORTH KEEPING.**
+ *
+ * `plan()` used to throw, so three unruled journeys withheld the twelve objectives the owner had
+ * set and the estate recorded no error budget at all — measured on mainnet 2026-08-11, `slos` and
+ * `slo_observations` both empty since the estate was built. Now the rows are written and the gap is
+ * reported, and this is the line that stops "reported" meaning "mentioned in some output nobody
+ * reads": the command exits **1**, so a deploy step that runs it goes red for exactly as long as
+ * something has no objective.
+ *
+ * 1 and not 2. Two is "you invoked this wrongly" — bad arguments, no credential — and is what the
+ * parse failures above return. A refusal is a correct invocation whose result is incomplete, and
+ * the two are worth telling apart from a pipeline log.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+function reportRefusals(refusals: readonly string[]): 0 | 1 {
+  if (refusals.length === 0) return 0
+  for (const refusal of refusals) stderr.write(`\nREFUSED: ${refusal}\n`)
+  return 1
 }
 
 export async function main(argsIn: readonly string[]): Promise<0 | 1 | 2> {

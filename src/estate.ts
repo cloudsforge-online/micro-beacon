@@ -77,9 +77,18 @@
  * line number was standing in for, done in a way that cannot rot.
  */
 
-import { accessToken, call, field, registerAccount, stringField, throwaway } from './calls.ts'
+import {
+  accessToken,
+  call,
+  field,
+  registerAccount,
+  sessionFieldIn,
+  stringField,
+  throwaway,
+} from './calls.ts'
 import { GROUPS } from './groups.ts'
 import { ecosystemJourneys } from './ecosystem.ts'
+import { poolAccount, poolSession } from './pool.ts'
 import type { JourneyContext, JourneyDefinition } from './journeys.ts'
 
 /**
@@ -91,33 +100,129 @@ import type { JourneyContext, JourneyDefinition } from './journeys.ts'
  */
 export { GROUPS }
 
+/**
+ * How often the estate's only account-creating journey creates an account.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THIRTY MINUTES, BECAUSE EVERY RUN OF THIS JOURNEY LEAVES A PERMANENT ROW.**
+ *
+ * At the 300s default (`BEACON_JOURNEY_INTERVAL_MS`) this journey alone would write 288 user rows
+ * a day into identity, for ever, and identity has no deletion route a monitor may call. Thirty
+ * minutes is 48 a day — two an hour — which is the rate micro-org#390 asked for and is chosen
+ * against the two things that actually bound it:
+ *
+ *   * **Detection.** `journeyFreshnessMs` defaults to four intervals, so the gate tolerates one
+ *     missed run and refuses on two. At 30 minutes a registration outage is a refused release
+ *     within an hour and an incident after `failThreshold` runs. Registration is not a route whose
+ *     breakage has to be caught in ninety seconds; it is one whose breakage must not be caught
+ *     only by a customer.
+ *   * **The budget's denominator.** `identity.register` carries a 95% objective over 28 days
+ *     (`sloseed.ts`). At 48 runs a day that window holds 1,344 runs, so one bad run costs 0.07% of
+ *     a 5% budget — still a population big enough for the arithmetic to mean something, which a
+ *     journey running twice a day would not be.
+ *
+ * It is declared here rather than in the environment because it is a property of what this journey
+ * COSTS, which is a fact about the journey and not about a deployment. A deployment that wants
+ * everything faster raises `BEACON_JOURNEY_INTERVAL_MS`; this one stays where it is, and
+ * `schedule.sync` takes whichever is longer.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export const REGISTER_INTERVAL_MS = 1_800_000
+
 export const IDENTITY_REGISTER: JourneyDefinition = {
   name: 'identity.register',
-  title: 'A new account can be created and recognised',
+  title: 'A new account can be created, and cannot be used until its address is confirmed',
   productGroup: GROUPS.account,
   // Only identity is dialled. Its budget, unambiguously.
   service: 'identity',
   critical: true,
+  intervalMs: REGISTER_INTERVAL_MS,
   async run(ctx) {
     const identity = ctx.target('identity')
     const account = throwaway()
 
-    const token = await ctx.step('register', async () => {
+    /*
+     * ────────────────────────────────────────────────────────────────────────────────────────────
+     * **202 WITH NO SESSION, AND THIS JOURNEY ASSERTED 201 WITH ONE UNTIL 2026-08-11.**
+     *
+     * identity stopped minting a session at registration when it grew email verification, and its
+     * own comment calls that the point of the route: an address nobody had proved control of was
+     * being signed in the moment it was typed, and the owner reported both halves from the live
+     * product — "i didn't receive any registration email and i was able to login directly".
+     *
+     * This journey went on demanding the shape identity had deliberately stopped serving, so a
+     * CRITICAL journey failed on every scheduled cycle and reported the fix as the defect. Measured
+     * on mainnet the day it was corrected: 24 consecutive `fail` runs in two hours, seven journeys
+     * with the same cause, while identity answered exactly what it was written to answer.
+     *
+     * Beacon's own suite stayed green throughout, because its fake answered 201 — a check that
+     * could not fail, pointed at an integration boundary. `estate.test.ts` now drives this against
+     * a fake that answers what mainnet answers, and the 201 case is asserted to REDDEN it.
+     * ────────────────────────────────────────────────────────────────────────────────────────────
+     */
+    const registered = await ctx.step('register', async () => {
       // The estate protecting itself is not the estate being broken. Identity rate-limits
       // registration, and recording a limit hit as a failure would open an incident against a
       // control that is working. `registerAccount` waits out identity's own `retry-after` once
       // before it skips — read the block above it in `calls.ts`: this journey skipped on every
       // cycle for ten cycles because Beacon's OWN non-critical journeys spent the allowance first.
       const result = await registerAccount(ctx, identity, account)
-      ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
-      const token = accessToken(result.body)
-      ctx.assert(token !== null, 'registration returned no access token')
-      return token as string
+      ctx.assert(
+        result.status === 202,
+        `expected 202 from /auth/register, got ${result.status} — ${result.text.slice(0, 160)}`,
+      )
+      ctx.assert(
+        field(result.body, 'verificationRequired') === true,
+        'registration answered 202 without saying a verification is required, so a client cannot ' +
+          'tell "check your email" from "you are signed in"',
+      )
+      // The NORMALISED address, echoed back. identity's route says why it is in the body: somebody
+      // who typed `Sam@Example.com` must be shown the spelling the platform will use, or "check
+      // your email" points at an inbox they will not think to look in.
+      ctx.assert(
+        stringField(result.body, 'email') === account.email.toLowerCase(),
+        `registration echoed ${String(stringField(result.body, 'email'))} rather than the ` +
+          'normalised address it will have mailed',
+      )
+      return result
     })
 
-    await ctx.step('read the account back from the token', async () => {
-      const result = await call(ctx, `${identity}/auth/me`, { token })
-      ctx.assert(result.status === 200, `expected 200 from /auth/me, got ${result.status}`)
+    await ctx.step('the response carries no session', async () => {
+      // The SAME response, not a second registration. This is a step of its own rather than three
+      // more lines above because the board shows the step name and this assertion is a security
+      // property in its own right: a regression that restores the session would otherwise read as
+      // "failed at step 'register'", which is the step that would still be passing. It costs no
+      // extra row — one run of this journey creates exactly one account, and `REGISTER_INTERVAL_MS`
+      // is the reason that sentence matters.
+      const leaked = sessionFieldIn(registered.body)
+      ctx.assert(
+        leaked === null,
+        `registration answered 202 and still returned "${String(leaked)}". THE ABSENCE OF A SESSION ` +
+          'IS THE POINT OF THIS ROUTE: a session here signs in an address nobody has proved control ' +
+          'of, which is the defect email verification was added to close',
+      )
+    })
+
+    await ctx.step('the account cannot sign in until the address is confirmed', async () => {
+      const result = await call(ctx, `${identity}/auth/login`, {
+        method: 'POST',
+        body: { identifier: account.email, password: account.password },
+      })
+      if (result.status === 429) ctx.skip('login is rate limited')
+      // 403 exactly, and the CODE. A 401 would mean identity had failed to find or match the
+      // credential — which is also a refusal, and would let this step report that verification is
+      // enforced on a deployment where registration had silently stored nothing at all.
+      ctx.assert(
+        result.status === 403,
+        `an unverified account was answered ${result.status} by /auth/login, not 403. Anything ` +
+          'that is not a refusal means the account is usable without its address being proved',
+      )
+      ctx.assert(
+        stringField(result.body, 'error', 'code') === 'email_unverified',
+        `the refusal code was ${String(stringField(result.body, 'error', 'code'))}, not ` +
+          'email_unverified — so this account was refused for some other reason and this step has ' +
+          'stopped proving what it says it proves',
+      )
     })
 
     await ctx.step('an unauthenticated read is refused', async () => {
@@ -138,12 +243,28 @@ export const IDENTITY_SIGNIN: JourneyDefinition = {
   critical: true,
   async run(ctx) {
     const identity = ctx.target('identity')
-    const account = throwaway()
 
-    await ctx.step('register the account this run will sign into', async () => {
-      const result = await registerAccount(ctx, identity, account)
-      ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
-    })
+    /*
+     * ────────────────────────────────────────────────────────────────────────────────────────────
+     * **IT REGISTERED THE ACCOUNT IT WAS ABOUT TO SIGN IN AS, AND THAT STOPPED BEING POSSIBLE.**
+     *
+     * A registration no longer produces an account that can sign in: `POST /auth/register` answers
+     * 202 and `signInRefusal` refuses `unverified` until the mailed link is spent, which this
+     * process cannot do. So a journey that registered-then-signed-in could only ever assert its own
+     * 403 — and before that, while it still asserted 201 on the registration, it failed one step
+     * earlier and never reached the sign-in at all.
+     *
+     * The account is a provisioned one now (`pool.ts`), which is also what a sign-in journey should
+     * always have been driving: signing in as an account created eleven seconds ago exercises the
+     * password path and nothing else, while a pool account has been through a verification, has a
+     * session history and is the thing a returning person actually is.
+     *
+     * **This journey does NOT take a cached session.** `poolAccount` returns credentials only; the
+     * sign-in below is a real one on every run, because a sign-in journey that reused a token would
+     * be the estate's favourite defect — a check that cannot fail.
+     * ────────────────────────────────────────────────────────────────────────────────────────────
+     */
+    const account = poolAccount(ctx, 'identity.signin')
 
     await ctx.step('sign in', async () => {
       // ────────────────────────────────────────────────────────────────────────────────────────
@@ -192,7 +313,6 @@ export const IDENTITY_HANDOFF: JourneyDefinition = {
   critical: true,
   async run(ctx) {
     const identity = ctx.target('identity')
-    const account = throwaway()
 
     // ──────────────────────────────────────────────────────────────────────────────────────────
     // THE HAND-OFF IS BOUND TO AN ORIGIN, AND THIS JOURNEY POSTED NO ORIGIN AT ALL.
@@ -221,13 +341,12 @@ export const IDENTITY_HANDOFF: JourneyDefinition = {
       )
     }
 
-    const token = await ctx.step('register', async () => {
-      const result = await registerAccount(ctx, identity, account)
-      ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
-      const registered = accessToken(result.body)
-      ctx.assert(registered !== null, 'registration returned no access token')
-      return registered as string
-    })
+    // A pool account rather than a registration, for `identity.signin`'s reason: a hand-off is
+    // minted FROM a session, and a freshly registered account no longer has one to mint from.
+    const subject = await ctx.step('be an account with a session', () =>
+      poolSession(ctx, identity, 'identity.handoff'),
+    )
+    const token = subject.token
 
     const code = await ctx.step('mint a handoff code', async () => {
       const result = await call(ctx, `${identity}/auth/handoff`, {
@@ -274,8 +393,12 @@ export const IDENTITY_HANDOFF: JourneyDefinition = {
     await ctx.step('the redeemed session is a real session', async () => {
       const result = await call(ctx, `${identity}/auth/me`, { token: redeemed })
       ctx.assert(result.status === 200, `the token from the hand-off answered ${result.status} at /auth/me`)
+      // The user ID, not the handle. A handle is a display name a person may change; the subject
+      // is what the hand-off is a hand-off OF, and it is the field every other service authorises
+      // on. Comparing anything mutable here would make this assertion fail the day somebody renames
+      // the pool account, and report it as the hand-off issuing somebody else's session.
       ctx.assert(
-        stringField(result.body, 'user', 'handle') === account.handle,
+        stringField(result.body, 'user', 'id') === subject.userId,
         'the hand-off issued a session for a different account',
       )
     })

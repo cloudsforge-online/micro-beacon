@@ -31,6 +31,13 @@ import {
 } from './ecosystem.ts'
 import { runJourney, type JourneyDefinition, type JourneyRun } from './journeys.ts'
 import { fakeEstate, type FakeEstate, type FakeReply, type FakeRequest } from './testsupport.ts'
+import { forgetSessions, REQUIRED_POOL_SIZE } from './pool.ts'
+
+/** The provisioned pool, as `BEACON_JOURNEY_ACCOUNTS` would supply it. See `estate.test.ts`. */
+const POOL = Array.from({ length: REQUIRED_POOL_SIZE }, (_, index) => ({
+  email: `pool${index}@beacon.test`,
+  password: `Pool-pass-${index}`,
+}))
 
 const SERVICES = ['identity', 'activity', 'hub-api', 'ledger', 'wallet', 'custody']
 
@@ -91,7 +98,7 @@ const DEPOSITABLE: ReadonlyMap<string, string> = new Map([
 async function healthyEstate(): Promise<Estate> {
   const base = await fakeEstate(SERVICES)
   const feed: Record_[] = []
-  const byToken = new Map<string, { id: string; handle: string }>()
+  const byToken = new Map<string, { id: string; handle: string; email: string }>()
   let next = 0
 
   const portfolio: Record<string, unknown> = {
@@ -117,16 +124,49 @@ async function healthyEstate(): Promise<Estate> {
     custodyRead: null as Estate['custodyRead'],
   })
 
-  const bearer = (req: FakeRequest): { id: string; handle: string } | null => {
+  const bearer = (req: FakeRequest): { id: string; handle: string; email: string } | null => {
     const header = req.headers['authorization'] ?? ''
     return header.startsWith('Bearer ') ? (byToken.get(header.slice(7)) ?? null) : null
   }
 
+  /*
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   * **A SIGN-IN IS WHAT COMMITS A FACT HERE NOW, AND REGISTRATION COMMITS NOTHING A JOURNEY CAN USE.**
+   *
+   * This fake answered `201` with a session and pushed a feed record, so five ecosystem journeys
+   * passed against a shape identity has not served since it grew email verification — measured on
+   * mainnet 2026-08-11, where all five were failing on every cycle while this suite was green
+   * (micro-org#371). Registration answers 202 with no session and the account it creates cannot
+   * sign in, so it is modelled that way and nothing below uses it.
+   *
+   * The feed record moves to `POST /auth/login`, which is honest about the estate rather than
+   * convenient: `identity.session.created` is published in the same transaction as the session row
+   * (identity's `sessions.ts`), activity classifies it, and it is the fact `ecosystem.event-bus`
+   * now waits for. A NEW record per sign-in, because that journey asserts the record did not exist
+   * before it acted — the assertion that stops a reused account turning the bus check into a check
+   * that cannot fail.
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   */
   base.route('POST /auth/register', (req) => {
-    const id = `019fc4ba-0b1e-7000-8fd4-${String(next).padStart(12, '0')}`
+    const email = String(req.body['email'] ?? '')
     const handle = String(req.body['handle'] ?? '')
+    if (!email || !handle) return { status: 400, body: { error: { code: 'bad_request' } } }
+    return {
+      status: 202,
+      body: { verificationRequired: true, email: email.toLowerCase(), status: 'Check your email for a verification link.' },
+    }
+  })
+
+  base.route('POST /auth/login', (req) => {
+    const identifier = String(req.body['identifier'] ?? '')
+    const member = POOL.find((entry) => entry.email === identifier)
+    if (!member || member.password !== String(req.body['password'] ?? '')) {
+      return { status: 401, body: { error: { code: 'unauthenticated' } } }
+    }
+    const id = `019fc4ba-0b1e-7000-9000-${String(POOL.indexOf(member)).padStart(12, '0')}`
+    const handle = `pool${POOL.indexOf(member)}`
     const token = `tok_${next++}`
-    byToken.set(token, { id, handle })
+    byToken.set(token, { id, handle, email: member.email })
     feed.push({
       id: `rec_${next}`,
       userId: id,
@@ -137,15 +177,15 @@ async function healthyEstate(): Promise<Estate> {
       summary: 'Signed in.',
     })
     return {
-      status: 201,
-      body: { accessToken: token, refreshToken: 'r', expiresIn: 900, user: { id, handle, email: String(req.body['email']) } },
+      status: 200,
+      body: { accessToken: token, refreshToken: 'r', expiresIn: 900, user: { id, handle, email: member.email } },
     }
   })
 
   base.route('GET /auth/me', (req) => {
     const account = bearer(req)
     if (!account) return { status: 401, body: { error: { code: 'unauthenticated' } } }
-    return { status: 200, body: { user: { id: account.id, handle: account.handle }, session: { id: 's' } } }
+    return { status: 200, body: { user: { id: account.id, handle: account.handle, email: account.email }, session: { id: 's' } } }
   })
 
   const page = (req: FakeRequest): { records: Record_[]; nextCursor: string | null } => {
@@ -314,9 +354,17 @@ function assertFailedAt(result: JourneyRun, step: string): void {
 
 async function withEstate(body: (estate: Estate) => Promise<void>): Promise<void> {
   const estate = await healthyEstate()
+  // Set per test and never left set, and the cache cleared at BOTH ends: `poolSession` keys its
+  // tokens on slot, so a token minted against the previous test's fake — a different port, an
+  // unknown bearer there — would otherwise be handed to the next one and read as an authorisation
+  // failure in whichever service the journey dialled first.
+  process.env['BEACON_JOURNEY_ACCOUNTS'] = JSON.stringify(POOL)
+  forgetSessions()
   try {
     await body(estate)
   } finally {
+    delete process.env['BEACON_JOURNEY_ACCOUNTS']
+    forgetSessions()
     await estate.close()
   }
 }
@@ -374,6 +422,45 @@ test('ecosystem.event-bus goes red when nothing ever arrives', async () => {
     // The message has to name the three places to look, because an empty feed says nothing about
     // which of the relay, the secret and the subscription row is at fault.
     assert.match(String(result.error), /relay|subscription|signing/i)
+  })
+})
+
+test('THE MUTATION: ecosystem.event-bus goes red when the relay stops and the OLD records remain', async () => {
+  await withEstate(async (estate) => {
+    /*
+     * ══════════════════════════════════════════════════════════════════════════════════════════
+     * **THE DEFECT THAT SWAPPING IN A REUSED ACCOUNT WOULD HAVE INTRODUCED, ASSERTED AGAINST.**
+     *
+     * This journey used to register a brand-new account, so "a record exists for this user id"
+     * could only be true if the bus had just carried one. A pool account has been signing in for
+     * weeks and its feed is already full — so the same assertion against a reused account is a
+     * check that CANNOT FAIL: the first poll finds a record from days ago and reports the bus
+     * healthy while the relay is stopped.
+     *
+     * Here the estate keeps serving every record it already had and simply stops adding new ones,
+     * which is exactly what a stopped relay looks like from the outside. The journey must fail.
+     *
+     * **Kills the mutation "find(record => record.userId === subject.userId)"** — the obvious
+     * reading, the one that was there before, and the one that would have made this journey green
+     * for ever. It is the freshness half of the predicate that is load-bearing, and nothing else in
+     * this file would notice its removal.
+     * ══════════════════════════════════════════════════════════════════════════════════════════
+     */
+    const feed = estate.handlerFor('GET /feed')
+    assert.ok(feed, 'the fake estate has no GET /feed handler')
+    // Snapshot the feed as it stands, then serve that snapshot for ever. The account still has
+    // history — it signs in, `/auth/me` works, every other route is healthy — and nothing new
+    // arrives.
+    let frozen: unknown = null
+    estate.route('GET /feed', (req) => {
+      const reply = feed(req)
+      if (reply.status !== 200) return reply
+      frozen ??= reply.body
+      return { status: 200, body: frozen }
+    })
+    const result = await run(ECOSYSTEM_EVENT_BUS, estate)
+    assertFailedAt(result, 'the fact reaches activity’s feed')
+    assert.match(String(result.error), /no NEW record/)
   })
 })
 
@@ -480,10 +567,23 @@ test('ecosystem.one-portfolio goes red when a total arrives as a JSON number', a
 test('ecosystem.one-portfolio goes red rather than comparing two degraded tiles', async () => {
   await withEstate(async (estate) => {
     // Both unavailable, both empty, both equal. The check that cannot fail, made to fail.
-    estate.route('GET /v1/dashboard', (req) => ({
-      status: (req.headers['authorization'] ?? '').startsWith('Bearer ') ? 200 : 401,
-      body: { userId: '019fc4ba-0b1e-7000-8fd4-000000000000', tiles: { portfolio: { status: 'unavailable', reason: 'ledger did not answer', data: null } } },
-    }))
+    //
+    // The healthy handler is WRAPPED rather than replaced, and only the tile is overwritten. A
+    // replacement would have to state the subject's user id, and the journey signs in as a pool
+    // account whose id this test does not know — pinning one made this test assert "the dashboard
+    // is for somebody else", which is a different defect from the one it is named after and would
+    // have passed for the wrong reason.
+    const dashboard = estate.handlerFor('GET /v1/dashboard')
+    assert.ok(dashboard, 'the fake estate has no GET /v1/dashboard handler')
+    estate.route('GET /v1/dashboard', (req) => {
+      const reply = dashboard(req)
+      if (reply.status !== 200) return reply
+      const body = reply.body as Record<string, unknown>
+      return {
+        status: 200,
+        body: { ...body, tiles: { portfolio: { status: 'unavailable', reason: 'ledger did not answer', data: null } } },
+      }
+    })
     estate.route('GET /v1/portfolio', () => ({
       status: 200,
       body: { portfolio: { status: 'unavailable', reason: 'ledger did not answer', data: null } },

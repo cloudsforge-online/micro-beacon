@@ -29,12 +29,14 @@ import {
   IDENTITY_HANDOFF,
   IDENTITY_REGISTER,
   IDENTITY_SIGNIN,
+  REGISTER_INTERVAL_MS,
   MARKET_CATALOGUE,
   WORLDS_REGISTRY,
 } from './estate.ts'
 import { MAX_REGISTER_WAIT_MS, REGISTER_RETRY_MARGIN_MS, registerRetryMs } from './calls.ts'
 import { runJourney, type JourneyDefinition, type JourneyRun } from './journeys.ts'
 import { fakeEstate, type FakeEstate, type FakeHandler, type FakeRequest } from './testsupport.ts'
+import { forgetSessions, POOL_SLOTS, REQUIRED_POOL_SIZE } from './pool.ts'
 
 /**
  * The healthy registration handler, so a test can refuse the first attempt and then delegate.
@@ -58,6 +60,48 @@ interface Account {
   readonly email: string
   readonly handle: string
   readonly password: string
+  /**
+   * Whether the address has been confirmed.
+   *
+   * Modelled rather than waved through, because it is the whole of what changed in identity: a
+   * fresh registration is unverified and `signInRefusal` refuses it, so a fake that let a new
+   * account sign in would let every journey below pass against a shape the estate stopped serving.
+   * Which is exactly what this fake did until 2026-08-11.
+   */
+  readonly verified: boolean
+}
+
+/**
+ * The provisioned pool, as the deployment would supply it.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THESE ACCOUNTS ARE VERIFIED AND A REGISTERED ONE IS NOT, AND THAT ASYMMETRY IS THE FIXTURE.**
+ *
+ * `BEACON_JOURNEY_ACCOUNTS` names accounts somebody created and confirmed once, out of band, which
+ * is the only kind of account that can sign in. Every journey that used to register to obtain a
+ * session now signs in as one of these; `identity.register` still registers, and what it asserts is
+ * that the account it just made can NOT sign in.
+ *
+ * Eight, because `POOL_SLOTS` declares eight and `pool.test.ts` proves that number is the one the
+ * call sites need. A shorter fixture here would make the journeys skip and every assertion below
+ * would pass by never running.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+const POOL = Array.from({ length: REQUIRED_POOL_SIZE }, (_, index) => ({
+  email: `pool${index}@beacon.test`,
+  password: `Pool-pass-${index}`,
+}))
+
+/**
+ * The user id the fake gives a pool member, as ONE function.
+ *
+ * A test that stubs `/auth/me` has to answer for the account the journey actually signed in as, and
+ * hard-coding the id in each stub would make every one of them a second copy of a fact this file
+ * already states. The copies would then be right until the fake changed shape, at which point the
+ * stub would answer for a subject that does not exist and the test would report the journey broken.
+ */
+function poolUserId(slot: number): string {
+  return `019fc4ba-0b1e-7000-9000-${String(slot).padStart(12, '0')}`
 }
 
 /**
@@ -85,15 +129,49 @@ async function healthyEstate(): Promise<FakeEstate> {
     return byToken.get(header.slice(7)) ?? null
   }
 
+  // The pool, already confirmed, exactly as a provisioned deployment would hold it.
+  for (const [index, member] of POOL.entries()) {
+    accounts.set(member.email, {
+      id: poolUserId(index),
+      email: member.email,
+      handle: `pool${index}`,
+      password: member.password,
+      verified: true,
+    })
+  }
+
+  /*
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   * **202 WITH NO SESSION. THIS ANSWERED 201 WITH ONE, AND THAT IS WHY THE SUITE WAS GREEN WHILE
+   * SEVEN JOURNEYS FAILED ON MAINNET EVERY FIVE MINUTES.**
+   *
+   * micro-org#371's finding, and it is about this file more than about the journeys: identity
+   * stopped issuing a session at registration, beacon went on demanding one, and beacon's own tests
+   * could not see it because the fake served the shape the journeys expected rather than the shape
+   * the estate serves. A check that cannot fail, pointed at an integration boundary.
+   *
+   * The body below is copied from a real response, taken from mainnet identity 2.5.19 on
+   * 2026-08-11 as a service principal:
+   *
+   *     202 {"verificationRequired":true,"email":"beacon+…@beacon.test",
+   *          "status":"Check your email for a verification link. It expires in 24 hours and works once."}
+   *
+   * `flipRegisterTo201` below turns this back, and a test asserts the journey REDDENS when it does.
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   */
   estate.route('POST /auth/register', (req) => {
     const email = String(req.body['email'] ?? '')
     const handle = String(req.body['handle'] ?? '')
     const password = String(req.body['password'] ?? '')
     if (!email || !handle || !password) return { status: 400, body: { error: { code: 'bad_request' } } }
     if (accounts.has(email)) return { status: 409, body: { error: { code: 'conflict' } } }
-    const account: Account = { id: `019fc4ba-0b1e-7000-8fd4-${String(next).padStart(12, '0')}`, email, handle, password }
+    const account: Account = { id: `019fc4ba-0b1e-7000-8fd4-${String(next).padStart(12, '0')}`, email, handle, password, verified: false }
     accounts.set(email, account)
-    return { status: 201, body: { accessToken: issue(account), refreshToken: 'r', expiresIn: 900, user: { id: account.id, email, handle, status: 'active', roles: ['player'] } } }
+    return {
+      status: 202,
+      // The NORMALISED address, which is what identity echoes and what the journey asserts on.
+      body: { verificationRequired: true, email: email.toLowerCase(), status: 'Check your email for a verification link. It expires in 24 hours and works once.' },
+    }
   })
 
   // The real contract: `identifier`, never `email`, and a 400 that does not say which of the two
@@ -108,7 +186,14 @@ async function healthyEstate(): Promise<FakeEstate> {
     if (!account || account.password !== password) {
       return { status: 401, body: { error: { code: 'unauthenticated' } } }
     }
-    return { status: 200, body: { accessToken: issue(account), refreshToken: 'r', expiresIn: 900, user: { id: account.id, handle: account.handle } } }
+    // 403 and `email_unverified`, not 401. identity separates "that credential is wrong" from "that
+    // credential is right and the address is unproved", and `identity.register` asserts the second
+    // of those by code — a fake that answered 401 here would let that assertion pass while proving
+    // the opposite of what it says.
+    if (!account.verified) {
+      return { status: 403, body: { error: { code: 'email_unverified', message: 'confirm your email address before signing in' } } }
+    }
+    return { status: 200, body: { accessToken: issue(account), refreshToken: 'r', expiresIn: 900, user: { id: account.id, email: account.email, handle: account.handle } } }
   })
 
   estate.route('GET /auth/me', (req) => {
@@ -142,7 +227,7 @@ async function healthyEstate(): Promise<FakeEstate> {
       return { status: 401, body: { error: { code: 'unauthenticated' } } }
     }
     codes.set(code, { ...entry, used: true })
-    return { status: 200, body: { accessToken: issue(entry.account), refreshToken: 'r', expiresIn: 900, user: { id: entry.account.id, handle: entry.account.handle } } }
+    return { status: 200, body: { accessToken: issue(entry.account), refreshToken: 'r', expiresIn: 900, user: { id: entry.account.id, email: entry.account.email, handle: entry.account.handle } } }
   })
 
   // A deployment with no Turnstile account — every developer machine, CI, and the estate until the
@@ -178,11 +263,28 @@ function assertFailedAt(result: JourneyRun, step: string): void {
 
 async function withEstate(body: (estate: FakeEstate) => Promise<void>): Promise<void> {
   const estate = await healthyEstate()
+  // The pool is configuration, so it is set per test and never left set — the same treatment
+  // `ORIGIN` and the service credential get in this file. `forgetSessions` matters as much: the
+  // token cache is keyed on slot and would otherwise carry a token minted against the PREVIOUS
+  // test's fake estate into the next one, where the port is different and the token is unknown.
+  process.env['BEACON_JOURNEY_ACCOUNTS'] = JSON.stringify(POOL)
+  forgetSessions()
   try {
     await body(estate)
   } finally {
+    delete process.env['BEACON_JOURNEY_ACCOUNTS']
+    forgetSessions()
     await estate.close()
   }
+}
+
+/** The same estate with no pool provisioned, for the skip-with-a-reason cases. */
+async function withoutPool(body: (estate: FakeEstate) => Promise<void>): Promise<void> {
+  await withEstate(async (estate) => {
+    delete process.env['BEACON_JOURNEY_ACCOUNTS']
+    forgetSessions()
+    await body(estate)
+  })
 }
 
 /* ------------------------------------------------------------------ identity.register */
@@ -191,6 +293,146 @@ test('identity.register passes against a healthy estate', async () => {
   await withEstate(async (estate) => {
     const result = await run(IDENTITY_REGISTER, estate)
     assert.equal(result.status, 'pass', String(result.error))
+  })
+})
+
+test('THE MUTATION: identity.register goes red when registration mints a session again', async () => {
+  await withEstate(async (estate) => {
+    /*
+     * ══════════════════════════════════════════════════════════════════════════════════════════
+     * **THIS IS THE TEST micro-org#371 ASKS FOR BY NAME, AND THE ONE THAT DID NOT EXIST.**
+     *
+     * The ticket's requirement, verbatim: "flipping the fake's status to 201 has to redden the
+     * test, or the fake is still the thing being tested." That is what this does — the fake is put
+     * back to exactly the body it served before 2026-08-11, and the journey must fail.
+     *
+     * Why it matters more than the status: 201-with-a-session is not a stale shape, it is the
+     * DEFECT. It signed in an address nobody had proved control of, and the owner reported both
+     * halves from the live product — "i didn't receive any registration email and i was able to
+     * login directly". A journey that accepted either status would go green on the day identity
+     * regressed, which is precisely how this one went green while mainnet failed every cycle.
+     * ══════════════════════════════════════════════════════════════════════════════════════════
+     */
+    estate.route('POST /auth/register', (req) => ({
+      status: 201,
+      body: {
+        accessToken: 'tok_regression',
+        refreshToken: 'r',
+        expiresIn: 900,
+        user: { id: 'u', email: String(req.body['email']), handle: String(req.body['handle']) },
+      },
+    }))
+    const result = await run(IDENTITY_REGISTER, estate)
+    assertFailedAt(result, 'register')
+    assert.match(String(result.error), /expected 202 from \/auth\/register, got 201/)
+  })
+})
+
+test('identity.register goes red when a 202 still carries a session', async () => {
+  await withEstate(async (estate) => {
+    // The subtler half, and the one a status check alone would walk straight past: identity keeps
+    // the 202 and puts the token back in the body. Every "did it answer 202" assertion in the
+    // estate passes, and an unverified address is signed in again.
+    estate.route('POST /auth/register', (req) => ({
+      status: 202,
+      body: { verificationRequired: true, email: String(req.body['email']).toLowerCase(), accessToken: 'tok_sneaky' },
+    }))
+    const result = await run(IDENTITY_REGISTER, estate)
+    assertFailedAt(result, 'the response carries no session')
+    assert.match(String(result.error), /THE ABSENCE OF A SESSION IS THE POINT OF THIS ROUTE/)
+  })
+})
+
+test('identity.register goes red when an unverified account is allowed to sign in', async () => {
+  await withEstate(async (estate) => {
+    // The security property the 202 exists to create, asserted from the other end. Kills the
+    // mutation "drop the unverified check from signInRefusal": registration would still answer 202
+    // with no session, every assertion above would still pass, and the account would be usable
+    // without its address ever being proved — which is the whole defect, reintroduced silently.
+    estate.route('POST /auth/login', () => ({
+      status: 200,
+      body: { accessToken: 'tok', refreshToken: 'r', expiresIn: 900, user: { id: 'u' } },
+    }))
+    const result = await run(IDENTITY_REGISTER, estate)
+    assertFailedAt(result, 'the account cannot sign in until the address is confirmed')
+  })
+})
+
+test('identity.register goes red when the refusal is a 403 for some OTHER reason', async () => {
+  await withEstate(async (estate) => {
+    // A suspended account is also refused, and also with a 403. Reading any 403 as proof that
+    // verification is enforced would let this step report the feature working on a deployment
+    // where registration stored nothing at all.
+    estate.route('POST /auth/login', () => ({
+      status: 403,
+      body: { error: { code: 'account_suspended', message: 'this account is suspended' } },
+    }))
+    const result = await run(IDENTITY_REGISTER, estate)
+    assertFailedAt(result, 'the account cannot sign in until the address is confirmed')
+    assert.match(String(result.error), /not\s+email_unverified/)
+  })
+})
+
+test('identity.register REGISTERS EXACTLY ONE ACCOUNT PER RUN', async () => {
+  await withEstate(async (estate) => {
+    const result = await run(IDENTITY_REGISTER, estate)
+    assert.equal(result.status, 'pass', String(result.error))
+    /*
+     * The row count, as an assertion. micro-org#390's measurement was 2,231 permanent identity rows
+     * a day from a monitor proving registration works, and this journey is now the only thing in
+     * beacon that creates one.
+     *
+     * **Kills the mutation "register again in the no-session step".** That is the natural way to
+     * write a second assertion about a response — call the helper again — it passes every other
+     * test in this file, and it silently doubles the only remaining source of rows. It was in the
+     * first draft of this change.
+     */
+    const registrations = estate.requests.filter((request) => request.path === '/auth/register')
+    assert.equal(registrations.length, 1)
+  })
+})
+
+test('identity.register runs at its OWN cadence, not the estate default', () => {
+  // A floor of thirty minutes: 48 rows a day instead of 288. The number is asserted here rather
+  // than only in `jobs.test.ts` because it is the whole reason this journey is allowed to keep
+  // registering at all, and a later edit that deleted the field would otherwise be caught by
+  // nothing — `intervalMs` is optional, so its absence typechecks.
+  assert.equal(IDENTITY_REGISTER.intervalMs, REGISTER_INTERVAL_MS)
+  assert.equal(REGISTER_INTERVAL_MS, 1_800_000)
+})
+
+test('identity.signin and identity.handoff SKIP, with the runbook named, when no pool is provisioned', async () => {
+  await withoutPool(async (estate) => {
+    // Not a fail. An estate that has not provisioned the pool has not demonstrated a broken
+    // product, and a fail here would open an incident against identity for a deploy step nobody
+    // has run. Kills "assert 200 and let it fail", which is what the old registration path did on
+    // mainnet for a whole day once the register shape changed.
+    for (const journey of [IDENTITY_SIGNIN, IDENTITY_HANDOFF]) {
+      process.env['BEACON_HANDOFF_ORIGIN'] = ORIGIN
+      try {
+        const result = await run(journey, estate)
+        assert.equal(result.status, 'skip', `${journey.name}: ${String(result.error)}`)
+        assert.match(String(result.error), /BEACON_JOURNEY_ACCOUNTS/)
+      } finally {
+        delete process.env['BEACON_HANDOFF_ORIGIN']
+      }
+    }
+  })
+})
+
+test('identity.signin SIGNS IN FOR REAL on every run, and never serves a cached token', async () => {
+  await withEstate(async (estate) => {
+    // A sign-in journey that reused a pool session would be the estate's favourite defect: a check
+    // that cannot fail, guarding the one route it is named after. Kills "use poolSession here too",
+    // which is the tidier-looking edit and would leave this journey asserting nothing about
+    // /auth/login at all on any run after the first.
+    await run(IDENTITY_SIGNIN, estate)
+    const before = estate.requests.filter((request) => request.path === '/auth/login').length
+    const result = await run(IDENTITY_SIGNIN, estate)
+    assert.equal(result.status, 'pass', String(result.error))
+    const after = estate.requests.filter((request) => request.path === '/auth/login').length
+    // Two per run: the correct password, then the wrong one.
+    assert.equal(after - before, 2)
   })
 })
 
@@ -440,15 +682,19 @@ test('identity.handoff goes red when a redeemed code is accepted twice', async (
       estate.route('POST /auth/handoff/redeem', () => ({
         // A replayable code is a session anyone who saw one URL can take. THE security property.
         status: 200,
-        body: { accessToken: `replayable_${issued++}`, user: { id: 'u' } },
+        body: { accessToken: `replayable_${issued++}`, user: { id: poolUserId(POOL_SLOTS['identity.handoff'] as number) } },
       }))
       // Answers for whoever registered last, so the journey's "the redeemed session is a real
       // session" step is satisfied and the run reaches the replay assertion. Breaking one property
       // at a time is the whole discipline: an estate broken in two ways proves only the first.
-      estate.route('GET /auth/me', () => {
-        const registered = [...estate.requests].reverse().find((r) => r.path === '/auth/register')
-        return { status: 200, body: { user: { id: 'u', handle: String(registered?.body['handle']) } } }
-      })
+      // Answers for the account the journey signed in as — slot 1 is `identity.handoff`'s — so the
+      // journey's "the redeemed session is a real session" step is satisfied and the run reaches
+      // the replay assertion. Breaking one property at a time is the whole discipline: an estate
+      // broken in two ways proves only the first.
+      estate.route('GET /auth/me', () => ({
+        status: 200,
+        body: { user: { id: poolUserId(POOL_SLOTS['identity.handoff'] as number), handle: 'pool1' } },
+      }))
       const result = await run(IDENTITY_HANDOFF, estate)
       assertFailedAt(result, 'the code is single use')
     } finally {

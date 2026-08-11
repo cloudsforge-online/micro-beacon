@@ -120,6 +120,26 @@ export interface JourneyDefinition {
   readonly critical: boolean
   /** Its own deadline, when the global one is wrong for it. */
   readonly deadlineMs?: number
+  /**
+   * Its own MINIMUM cadence, when running at the estate's default would cost more than it proves.
+   *
+   * ────────────────────────────────────────────────────────────────────────────────────────────
+   * Added 2026-08-11 for `identity.register`, which is the only journey in the estate that leaves a
+   * permanent row behind on every run — 15,210 of them in identity's `users` on mainnet, 2,231 a
+   * day, against an estate with no real users (micro-org#390). A cadence is the honest lever for
+   * that: the journey keeps registering against the real route, and it does so twice an hour
+   * instead of twelve times.
+   *
+   * A FLOOR, not an override. `schedule.sync` takes whichever of this and
+   * `BEACON_JOURNEY_INTERVAL_MS` is LONGER, so a deployment that slows everything down slows this
+   * too, and one that speeds everything up cannot speed this up — which is the direction that
+   * matters, because the cost being bounded here is the deployment's, not beacon's.
+   *
+   * Absent means "the estate's default", which is what every other journey wants: a cadence
+   * declared per journey by default would be twelve numbers nobody revisits.
+   * ────────────────────────────────────────────────────────────────────────────────────────────
+   */
+  readonly intervalMs?: number
   run(ctx: JourneyContext): Promise<void>
 }
 

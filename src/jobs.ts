@@ -66,7 +66,7 @@ import {
   type JourneyStatus,
 } from './journeys.ts'
 import { recordObservation } from './slo.ts'
-import { journeySloName } from './sloseed.ts'
+import { availabilitySloName, journeySloName } from './sloseed.ts'
 
 export const PROBE_KIND = 'probe.run'
 export const JOURNEY_KIND = 'journey.run'
@@ -153,9 +153,31 @@ export interface JobDeps {
   readonly now?: () => Date
 }
 
-/** Availability SLO name for a service. One naming rule, applied in one place. */
-export function availabilitySloName(target: string): string {
-  return `${target}.availability`
+/**
+ * Availability SLO name for a target. One naming rule, applied in one place — and that place is
+ * `sloseed.ts`, which is now the other end of this key: the seeder writes the `slos` row that this
+ * file's observation carries a foreign key onto. Re-exported rather than redefined, exactly as
+ * `journeySloName` below is, because two copies of a key drift and the symptom of the drift is
+ * every observation being silently rejected. Which is what happened.
+ */
+export { availabilitySloName }
+
+/**
+ * How long this journey must wait between scheduled runs.
+ *
+ * **`Math.max`, so a journey's own cadence is a FLOOR and never a licence to run more often.**
+ * `identity.register` declares 30 minutes because every run of it writes a permanent row into a
+ * production identity table (`journeys.ts`'s `intervalMs`); a deployment that set
+ * `BEACON_JOURNEY_INTERVAL_MS` to 60s would otherwise silently undo that and put the estate back
+ * on 1,440 rows a day. The reverse — a deployment that wants everything slower — is honoured,
+ * because slowing a monitor down is a decision an operator is allowed to make and speeding this one
+ * up is not.
+ *
+ * Pure and exported so the direction is provable rather than described. It is one `Math.max` whose
+ * arguments are trivially swappable, and swapping them reintroduces the defect silently.
+ */
+export function journeyCadenceMs(journey: JourneyDefinition, defaultMs: number): number {
+  return Math.max(defaultMs, journey.intervalMs ?? 0)
 }
 
 /**
@@ -234,7 +256,7 @@ export function registerHandlers(runner: JobRunner, deps: JobDeps): JobRunner {
     }
 
     const registered = await listRegistered(deps.sql)
-    const known = new Set(deps.journeys.map((journey) => journey.name))
+    const known = new Map(deps.journeys.map((journey) => [journey.name, journey]))
     const lastRun = (await deps.sql`
       select journey, max(started_at) as last_at
         from journey_runs where trigger <> 'manual' group by journey
@@ -246,9 +268,10 @@ export function registerHandlers(runner: JobRunner, deps: JobDeps): JobRunner {
       // A row whose definition has been deleted from the code is not scheduled. It stays in the
       // table so its history survives, and the gate keeps refusing on it if it is critical —
       // deleting a failing journey must not be a way to make the gate green.
-      if (!known.has(journey.name)) continue
+      const definition = known.get(journey.name)
+      if (!definition) continue
       const last = lastByJourney.get(journey.name)
-      if (last && at.getTime() - last.getTime() < deps.journeyIntervalMs) continue
+      if (last && at.getTime() - last.getTime() < journeyCadenceMs(definition, deps.journeyIntervalMs)) continue
       await deps.queue.enqueue({
         kind: JOURNEY_KIND,
         key: journey.name,
