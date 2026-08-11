@@ -33,6 +33,8 @@
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
 
+import type { EntryKind } from '@cloudsforge/contracts-money'
+
 import { wait, waitMsFor } from './backoff.ts'
 import { keccak256, selector, toHex } from './keccak.ts'
 
@@ -238,6 +240,36 @@ export async function subjectOf(identity: Identity, userToken: string): Promise<
 }
 
 /**
+ * The one entry kind this service posts, checked against the ledger's closed vocabulary.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **THE LEDGER'S ENTRY KINDS ARE A CLOSED SET, AND A KIND OUTSIDE IT POSTS NOTHING AT ALL.**
+ *
+ * `ENTRY_KINDS` in `@cloudsforge/contracts-money` is the whole vocabulary, frozen and `as const`,
+ * with `EntryKind` and `isEntryKind()` derived from it. micro-ledger's `validateEntryRequest`
+ * answers `400 invalid_entry` for anything else BEFORE it opens a transaction, so an invented kind
+ * does not post a wrong entry — it posts no entry, and the symptom is nothing happening.
+ *
+ * Two services in this estate learned that the expensive way. micro-foresight posted
+ * `foresight.settlement_fee` for months and no settlement fee was ever booked; micro-tessera posted
+ * `item_issue` before that kind existed and no object ever entered the books (micro-org#407 §3).
+ * Both survived the same way this call site did: the kind sat as a bare string literal inside a
+ * plain object body handed to `JSON.stringify`, where nothing typechecks it and the only reader is
+ * a service in another repository at run time.
+ *
+ * Naming it here and annotating it `EntryKind` moves that reader to `tsc`. Beacon is the estate's
+ * synthetic-journey monitor, so the cost of a refused fixture is not a missing fee: a journey that
+ * cannot fund its account fails or skips, and the thing that would be lying about the estate is the
+ * estate's own monitoring.
+ *
+ * `reverseEntry` below sends no kind at all — `POST /entries/:id/reverse` derives `reversal` on the
+ * ledger's side — so this constant is the complete list of what beacon puts in the journal, and
+ * `money.test.ts` asserts its MEMBERSHIP rather than its spelling against these same exports.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export const CREDIT_ENTRY_KIND: EntryKind = 'deposit_credited'
+
+/**
  * Credit a subject with real money, as a real balanced double entry.
  *
  * ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -265,7 +297,9 @@ export async function creditSubject(
   if (options.amount <= 0n) throw new MoneyError('a credit fixture must be a positive amount')
   const amount = options.amount.toString()
   const body = {
-    kind: 'deposit_credited',
+    // Not a literal: `CREDIT_ENTRY_KIND` is typed `EntryKind`, so a typo here is a compile error
+    // rather than a fixture that quietly funds nothing. See the constant's own header.
+    kind: CREDIT_ENTRY_KIND,
     originatingService: 'wallet',
     actor: 'service:wallet',
     idempotencyKey: options.idempotencyKey,
