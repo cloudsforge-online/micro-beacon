@@ -77,12 +77,12 @@ import {
   call,
   field,
   pollFor,
-  registerThrowaway,
   serviceCredential,
   stringField,
   type Json,
 } from './calls.ts'
 import { GROUPS } from './groups.ts'
+import { poolSession } from './pool.ts'
 import type { JourneyContext, JourneyDefinition } from './journeys.ts'
 import type { LiveScope } from '@cloudsforge/contracts-auth'
 
@@ -197,21 +197,61 @@ export const ECOSYSTEM_EVENT_BUS: JourneyDefinition = {
     const identity = ctx.target('identity')
     const activity = ctx.target('activity')
 
-    const subject = await ctx.step('register an account in identity', () =>
-      registerThrowaway(ctx, identity),
+    /*
+     * ══════════════════════════════════════════════════════════════════════════════════════════
+     * **THE FACT HAS TO BE COMMITTED *NOW*, AND SWAPPING IN A REUSED ACCOUNT NEARLY BROKE THAT.**
+     *
+     * This journey used to register an account and then look for a record carrying that account's
+     * user id. Registration is no longer a thing beacon may do eight times a cycle (`pool.ts`), and
+     * the obvious substitution — a pool account plus the same `userId` lookup — is a **check that
+     * cannot fail**: a pool account has been signing in for weeks, its feed is already full, and
+     * the very first poll would find a record from days ago and report the bus healthy while the
+     * relay was stopped. That is the estate's recurring defect class, and it would have been
+     * introduced by a change made to close a different one.
+     *
+     * So the fact is a SIGN-IN rather than a registration. `identity.session.created` is published
+     * in the same transaction as the session row (identity's `sessions.ts`, through `withOutbox`)
+     * and activity classifies it (`classify.ts`), so it exercises every mechanism the registration
+     * did — outbox, leased relay, MAC over the raw body, inbox dedupe on `(topic, event_id)` — and
+     * commits no permanent user row to do it.
+     *
+     * And freshness is asserted rather than assumed: the feed is read BEFORE the sign-in and the
+     * ids are remembered, so what this waits for is a record that **did not exist a moment ago**.
+     * A stopped relay now fails this journey within one deadline instead of passing it for ever.
+     * ══════════════════════════════════════════════════════════════════════════════════════════
+     */
+    const before = await ctx.step('read the feed before the fact exists', async () => {
+      // The cached session, deliberately: this read is positioning, not the fact. Forcing a fresh
+      // sign-in here would commit the very event the next step is about to wait for, and this
+      // journey would then be racing itself.
+      const seed = await poolSession(ctx, identity, 'ecosystem.event-bus/subject')
+      const result = await call(ctx, `${activity}/feed?limit=50`, { token: seed.token })
+      ctx.assert(result.status === 200, `expected 200 from activity /feed, got ${result.status}`)
+      return new Set(records(result.body).map((record) => record.id))
+    })
+
+    const subject = await ctx.step('commit a fact in identity', () =>
+      // `fresh`, which is the whole step. A cached token would mean no new session row, no outbox
+      // row and nothing for the bus to carry — and the poll below would then be waiting for an
+      // event nothing had emitted, reporting a broken bus on a working estate.
+      poolSession(ctx, identity, 'ecosystem.event-bus/subject', { fresh: true }),
     )
 
     const arrived = await ctx.step('the fact reaches activity’s feed', async () => {
       const found = await pollFor(ctx, BUS, async () => {
-        const result = await call(ctx, `${activity}/feed?limit=20`, { token: subject.token })
+        const result = await call(ctx, `${activity}/feed?limit=50`, { token: subject.token })
         ctx.assert(result.status === 200, `expected 200 from activity /feed, got ${result.status}`)
-        return records(result.body).find((record) => record.userId === subject.userId) ?? null
+        return (
+          records(result.body).find(
+            (record) => record.userId === subject.userId && !before.has(record.id),
+          ) ?? null
+        )
       })
       ctx.assert(
         found !== null,
-        `a user was committed in identity and no record for them reached activity within ` +
-          `${(BUS.attempts * BUS.intervalMs) / 1000}s. The relay, the signing secret and the ` +
-          `subscription rows in identity's event_subscriptions are the three places to look.`,
+        `a session was committed in identity and no NEW record for that account reached activity ` +
+          `within ${(BUS.attempts * BUS.intervalMs) / 1000}s. The relay, the signing secret and ` +
+          `the subscription rows in identity's event_subscriptions are the three places to look.`,
       )
       return found as FeedRecord
     })
@@ -253,7 +293,11 @@ export const ECOSYSTEM_EVENT_BUS: JourneyDefinition = {
     })
 
     await ctx.step('the record is in that account’s feed and no other', async () => {
-      const other = await registerThrowaway(ctx, identity)
+      // A SECOND, DIFFERENT account. The assertion below is that one account cannot read another's
+      // record — the estate's worst possible data leak if it ever regresses — and it is worth
+      // nothing if both tokens carry the same subject. `pool.ts` gives this journey two slots for
+      // exactly this step, and refuses a pool that names one account twice.
+      const other = await poolSession(ctx, identity, 'ecosystem.event-bus/bystander')
       const result = await call(ctx, `${activity}/feed?limit=50`, { token: other.token })
       ctx.assert(result.status === 200, `expected 200 from activity /feed, got ${result.status}`)
       const visible = records(result.body)
@@ -299,8 +343,8 @@ export const ECOSYSTEM_ONE_ACTIVITY: JourneyDefinition = {
     const activity = ctx.target('activity')
     const hub = ctx.target('hub-api')
 
-    const subject = await ctx.step('register an account in identity', () =>
-      registerThrowaway(ctx, identity),
+    const subject = await ctx.step('be an account with a session', () =>
+      poolSession(ctx, identity, 'ecosystem.one-activity'),
     )
 
     const direct = await ctx.step('read the feed from activity', async () => {
@@ -404,8 +448,8 @@ export const ECOSYSTEM_ONE_PORTFOLIO: JourneyDefinition = {
     const identity = ctx.target('identity')
     const hub = ctx.target('hub-api')
 
-    const subject = await ctx.step('register an account in identity', () =>
-      registerThrowaway(ctx, identity),
+    const subject = await ctx.step('be an account with a session', () =>
+      poolSession(ctx, identity, 'ecosystem.one-portfolio'),
     )
 
     const fromDashboard = await ctx.step('read the portfolio tile from the dashboard', async () => {
@@ -486,8 +530,8 @@ export const ECOSYSTEM_ONE_ACCOUNT: JourneyDefinition = {
     const activity = ctx.target('activity')
     const hub = ctx.target('hub-api')
 
-    const subject = await ctx.step('register an account in identity', () =>
-      registerThrowaway(ctx, identity),
+    const subject = await ctx.step('be an account with a session', () =>
+      poolSession(ctx, identity, 'ecosystem.one-account'),
     )
 
     await ctx.step('identity recognises the token as that account', async () => {
@@ -497,9 +541,16 @@ export const ECOSYSTEM_ONE_ACCOUNT: JourneyDefinition = {
         stringField(result.body, 'user', 'id') === subject.userId,
         `/auth/me answered for ${String(stringField(result.body, 'user', 'id'))}, not for the registered account`,
       )
+      // The EMAIL, not the handle. This compared against the handle submitted at registration, and
+      // there is no registration here any more — a pool account's handle is whatever it was
+      // provisioned with, which this process does not know and must not be told, because the pool
+      // is configured as address-and-password and nothing else. The address is the identifier the
+      // sign-in was performed with, so it is the field that can be checked against something this
+      // journey actually holds; identity normalises it, hence the comparison in lower case.
       ctx.assert(
-        stringField(result.body, 'user', 'handle') === subject.account.handle,
-        `the handle submitted at registration is not the handle identity reports back`,
+        stringField(result.body, 'user', 'email')?.toLowerCase() === subject.account.email.toLowerCase(),
+        `/auth/me reports ${String(stringField(result.body, 'user', 'email'))} for the token that ` +
+          'was minted by signing in as a different address',
       )
     })
 
@@ -775,8 +826,8 @@ export const ECOSYSTEM_DEPOSIT_ADDRESS: JourneyDefinition = {
     const wallet = ctx.target('wallet')
     const custody = ctx.target('custody')
 
-    const subject = await ctx.step('register an account in identity', () =>
-      registerThrowaway(ctx, identity),
+    const subject = await ctx.step('be an account with a session', () =>
+      poolSession(ctx, identity, 'ecosystem.deposit-address'),
     )
 
     const assignment = await ctx.step('provision a deposit address', async () => {

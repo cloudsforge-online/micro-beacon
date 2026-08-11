@@ -362,6 +362,44 @@ five-minute cadence that is ~288 addresses a day; nothing in the estate deletes 
 
     delete from custody_keys where user_id in (select id from users where email like 'beacon+%');
 
+#### The account pool — `BEACON_JOURNEY_ACCOUNTS`
+
+**These journeys used to register a throwaway account each, every cycle. They no longer can, and
+they no longer should.**
+
+Cannot, because `POST /auth/register` answers **202 with no session** and `signInRefusal` refuses
+the account until the link identity mails is spent. Measured against mainnet identity 2.5.19 on
+2026-08-11, as a service principal:
+
+    POST /auth/register              202  {"verificationRequired":true, ...}   no token, no user id
+    POST /auth/login (that account)  403  {"error":{"code":"email_unverified", ...}}
+
+Seven journeys asserted 201-with-a-session and failed on every scheduled cycle for as long as that
+was true, while beacon's own suite stayed green against a fake that answered 201 (micro-org#371).
+
+Should not, because it cost 15,210 permanent rows in identity's `users` — out of 15,364 total, on
+an estate with **no real users** — growing 2,231–2,256 a day and reaped by nothing, since identity
+has no deletion route a monitor may call (micro-org#390).
+
+So the journeys that need to be somebody sign in as a bounded pool of accounts provisioned once, out
+of band: `scripts/provision-journey-accounts.md`. `pool.ts`'s `POOL_SLOTS` assigns one slot per
+consumer statically rather than handing accounts out from a queue — a queue cannot agree with itself
+across two replicas, and two journeys on one account move each other's balance and each other's
+session. `ecosystem.event-bus` holds two slots because its last step asserts that one account cannot
+read another's records, which is worth nothing if both tokens carry the same subject.
+
+Unset is a **skip naming the variable and the runbook**, never a fail: an estate that has not
+provisioned the pool has not demonstrated a broken product.
+
+`identity.register` still registers, against the real route, and it is now the only thing in beacon
+that does. It runs at a thirty-minute floor a deployment cannot shorten — ~48 rows a day rather than
+~2,250 — and it asserts the contract that replaced the old one: 202, **no session anywhere in the
+body**, and the account it just made refused at sign-in with `email_unverified`.
+
+The prune for the rows that already exist is `scripts/prune-beacon-residue.sql`. Nothing runs it
+automatically and nothing here ever will: 15k rows out of a production identity table is a backup
+and a human, and the script's header is mostly the procedure for taking one.
+
 #### What running them found, that is not beacon's to fix
 
 Recorded here because each was invisible from inside the service that owns it, which is the whole

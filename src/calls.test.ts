@@ -34,7 +34,7 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { throwaway } from './calls.ts'
+import { SESSION_FIELDS, sessionFieldIn, throwaway } from './calls.ts'
 import { syntheticCredential } from './browser/fixtures.ts'
 import type { JourneyContext } from './journeys.ts'
 
@@ -180,3 +180,60 @@ async function sources(root: string, prefix = ''): Promise<readonly string[]> {
   }
   return found
 }
+
+/* ------------------------------------------------------------------ the 202 has no session */
+
+test('sessionFieldIn NAMES a session in every shape identity has ever served', () => {
+  /*
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   * **A NEGATIVE ASSERTION IS THE EASIEST KIND IN THIS ESTATE TO SATISFY BY ACCIDENT.**
+   *
+   * `identity.register` asserts that a 202 carries NO session, and a hand-written version of that —
+   * `body.accessToken === undefined` — passes on a response that carries `tokens.accessToken`
+   * instead, or `refreshToken` alone, or the whole `user` object. `accessToken()` above already
+   * reads two different shapes because identity has served two, so the set is not hypothetical.
+   *
+   * Kills the mutation "check only the root accessToken": each case below is a real body identity
+   * has served or could serve, and each one is a session reaching a caller who has proved nothing.
+   * ══════════════════════════════════════════════════════════════════════════════════════════════
+   */
+  assert.equal(sessionFieldIn({ accessToken: 'x' }), 'accessToken')
+  assert.equal(sessionFieldIn({ tokens: { accessToken: 'x' } }), 'tokens.accessToken')
+  assert.equal(sessionFieldIn({ refreshToken: 'x' }), 'refreshToken')
+  assert.equal(sessionFieldIn({ tokens: { refreshToken: 'x' } }), 'tokens.refreshToken')
+  assert.equal(sessionFieldIn({ user: { id: 'u' } }), 'user')
+  // The 201 body verbatim, as identity served it before the change. It reports the FIRST field it
+  // finds, which is enough: the assertion is "there is a session here", not an inventory.
+  assert.equal(
+    sessionFieldIn({ accessToken: 'x', refreshToken: 'r', expiresIn: 900, user: { id: 'u' } }),
+    'accessToken',
+  )
+})
+
+test('sessionFieldIn finds nothing in the body mainnet actually serves', () => {
+  // Taken from mainnet identity 2.5.19 on 2026-08-11, registering as a service principal. A
+  // helper that reported a session here would make `identity.register` fail on a correct estate,
+  // which is the same defect as the one it replaces pointing the other way.
+  assert.equal(
+    sessionFieldIn({
+      verificationRequired: true,
+      email: 'beacon+0000@beacon.test',
+      status: 'Check your email for a verification link. It expires in 24 hours and works once.',
+    }),
+    null,
+  )
+  assert.equal(sessionFieldIn({}), null)
+  // A field that merely LOOKS like one. `user` is the path, `userId` is not, and treating a
+  // near-miss as a session would fail every correct estate that echoed an id back.
+  assert.equal(sessionFieldIn({ userId: 'u', verificationRequired: true }), null)
+})
+
+test('the SESSION_FIELDS table covers both shapes accessToken() reads', () => {
+  // The two must not drift: `accessToken` accepts the root and the `tokens` wrapper, so a session
+  // arriving in either shape is one this harness could use — and therefore one the 202 must not
+  // carry. A table that had lost the `tokens` path would still pass every test above that names it
+  // explicitly, so the relationship is asserted rather than assumed.
+  const paths = SESSION_FIELDS.map((path) => path.join('.'))
+  assert.ok(paths.includes('accessToken'))
+  assert.ok(paths.includes('tokens.accessToken'))
+})

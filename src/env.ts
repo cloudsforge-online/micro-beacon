@@ -30,6 +30,7 @@
 
 import { hostname } from 'node:os'
 import { SecretError, assertOpaqueSecret, assertServiceCredential } from '@cloudsforge/secrets'
+import { PoolError, parsePool as parsePoolPure, REQUIRED_POOL_SIZE } from './pool.ts'
 import { TargetsError, parseTargets as parseTargetsPure } from './targets.ts'
 
 /**
@@ -198,6 +199,30 @@ export function parseTargets(raw: string): ReadonlyMap<string, string> {
   }
 }
 
+/**
+ * `BEACON_JOURNEY_ACCOUNTS` — the provisioned accounts the journeys sign in as.
+ *
+ * Validated HERE and at boot, even though `pool.ts` reads `process.env` again at call time, and the
+ * duplication is the point: a malformed value would otherwise surface as eight journeys skipping
+ * with a parse error in their skip reason, hours after a deploy, on a status page. The parser lives
+ * in `./pool.ts` for `targets.ts`'s reason — no side effects, so a command that has no business
+ * holding a database credential can read the same variable — and is re-raised as an `EnvError` so
+ * every caller of `loadEnv` still sees one type.
+ *
+ * The RESULT is deliberately not put on `Env`. It is a list of live passwords, and `Env` is a value
+ * that gets logged, echoed into diagnostics and handed to a fake in tests. `pool.ts` reads the
+ * variable at the point of use and never returns it upwards; this function exists to make a bad
+ * value fail the boot, and to discard it.
+ */
+export function assertPool(raw: string): void {
+  try {
+    parsePoolPure(raw)
+  } catch (err) {
+    if (err instanceof PoolError) throw new EnvError(err.message)
+    throw err
+  }
+}
+
 export interface Env {
   readonly port: number
   readonly env: string
@@ -215,6 +240,15 @@ export interface Env {
 
   /** The estate's addresses. One variable; see the file header. */
   readonly targets: ReadonlyMap<string, string>
+
+  /**
+   * How many accounts a fully-exercised deployment has to provision, NOT the accounts themselves.
+   *
+   * A number rather than the pool, deliberately — see `assertPool`. It is here so `/readyz` and the
+   * boot log can state the requirement without any part of the estate carrying the credentials
+   * around in a value that gets serialised.
+   */
+  readonly journeyAccounts: number
 
   /**
    * The credential Prometheus presents in `x-beacon-token`.
@@ -386,6 +420,13 @@ export function loadEnv(source: Source = process.env, host = ''): Env {
     instanceId: optional(source, 'INSTANCE_ID', host || 'unknown'),
 
     targets: parseTargets(optional(source, 'BEACON_TARGETS', '')),
+    // Parsed and thrown away. See `assertPool`: the value is credentials, and the only thing this
+    // call contributes to `Env` is the guarantee that a deployment which set the variable wrongly
+    // finds out at boot rather than from a skip reason on the public status page.
+    journeyAccounts: (() => {
+      assertPool(optional(source, 'BEACON_JOURNEY_ACCOUNTS', ''))
+      return REQUIRED_POOL_SIZE
+    })(),
     token: requiredOpaqueSecret(source, 'BEACON_TOKEN'),
 
     probeDeadlineMs,

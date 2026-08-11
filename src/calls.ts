@@ -125,17 +125,27 @@ export interface Throwaway {
 }
 
 /**
- * A throwaway account, per run.
+ * A throwaway account, for the one journey whose subject is registration.
  *
- * **Never a real user and never one shared between journeys.** Two journeys sharing an account
- * would move each other's balance and each other's session, and the flake that produces is
- * indistinguishable from the outage it would be reported as. The address is namespaced so the rows
- * can be found and pruned — identity has no account-deletion route that a monitor may call, which
- * is a fact about the estate rather than about this harness, and it is said here because a monitor
- * that quietly accumulates rows in a production table gets switched off by whoever finds out the
- * hard way.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **ONE CALLER. IT USED TO HAVE EIGHT, AND THAT COST 2,250 PERMANENT ROWS A DAY.**
  *
- *     delete from users where email like 'beacon+%';
+ * Measured on mainnet 2026-08-11 (micro-org#390): 15,210 `beacon+…@beacon.test` rows in identity's
+ * `users` out of 15,364 total, on an estate with no real users, growing 2,231–2,256 a day and
+ * reaped by nothing. Eight journeys registered one each per cycle to obtain a session, and a
+ * session is no longer something registration hands out — so they sign in as `pool.ts`'s provisioned
+ * accounts now, and this is called only by `identity.register`, at its own slower cadence.
+ *
+ * The address is still namespaced so the existing rows can be found and pruned, because identity
+ * has no account-deletion route a monitor may call: `DELETE /users/me` demands the account's own
+ * password and opens a grace window rather than removing anything. That is a fact about the estate
+ * rather than about this harness, and it is said here because a monitor that quietly accumulates
+ * rows in a production table gets switched off by whoever finds out the hard way.
+ *
+ * The prune is `scripts/prune-beacon-residue.sql` — reviewed, in the tree, and DELIBERATELY NOT
+ * RUN by anything in this process. Fifteen thousand rows out of a production identity table is a
+ * backup and a human, not a job.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
  *
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  * **THE `.test` IN THAT ADDRESS IS LOAD-BEARING. IT IS NOT A NAMING CONVENTION.**
@@ -471,26 +481,53 @@ export async function registerAccount(
 }
 
 /**
- * Register a throwaway and return its token and id.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **`registerThrowaway` IS GONE, AND THE REASON IS THAT IT COULD NOT EXIST.**
  *
- * Four journeys need an account before they can assert anything, and each one was going to write
- * this block. A rate limit is a SKIP: the estate protecting itself is not the estate being broken,
- * and recording a limit hit as a failure would open an incident against a control that is working.
- * It is a skip only after `registerAccount` has waited out identity's own `retry-after` once —
- * see the block above for why that wait exists and what it is not.
+ * It registered an account and returned a session, and four journeys used it to become somebody.
+ * `POST /auth/register` stopped issuing a session when identity grew email verification: it
+ * answers **202 with no token and no user id**, and `signInRefusal` refuses the account until the
+ * mailed link is spent. So the function's whole return value had no source any more, and every one
+ * of its callers had been asserting `201` against a route that answers `202` — measured failing on
+ * mainnet on every scheduled cycle, seven journeys at once (micro-org#371).
+ *
+ * There is no version of it that works. The token that would verify the account exists only in
+ * notify's copy of the `identity.email.verification_requested` event, beacon does not probe notify,
+ * and it is a live credential that must not enter this process. So the estate's journeys sign in as
+ * a provisioned pool instead — `pool.ts` — and registration is exercised by the one journey whose
+ * subject it is, `identity.register`, which now asserts the 202 contract rather than a session.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
-export async function registerThrowaway(
-  ctx: JourneyContext,
-  identity: string,
-): Promise<{ token: string; userId: string; account: Throwaway }> {
-  const account = throwaway()
-  const result = await registerAccount(ctx, identity, account)
-  ctx.assert(result.status === 201, `expected 201 from /auth/register, got ${result.status}`)
-  const token = accessToken(result.body)
-  ctx.assert(token !== null, 'registration returned no access token')
-  const userId = stringField(result.body, 'user', 'id')
-  ctx.assert(userId !== null, 'registration returned no user id')
-  return { token: token as string, userId: userId as string, account }
+
+/**
+ * The field names a session has ever arrived under, at any depth this harness reads.
+ *
+ * `accessToken` at the root and under `tokens` are the two shapes `accessToken()` above accepts;
+ * `refreshToken` and `user` are the rest of what a 201 used to carry. Enumerated as data so the
+ * "no session" assertion is a statement about a SET rather than four hand-written `=== undefined`
+ * checks that a fifth field would walk straight past.
+ */
+export const SESSION_FIELDS: readonly (readonly string[])[] = Object.freeze([
+  ['accessToken'],
+  ['tokens', 'accessToken'],
+  ['refreshToken'],
+  ['tokens', 'refreshToken'],
+  ['user'],
+])
+
+/**
+ * The first session-bearing field present in a registration response, or null.
+ *
+ * Pure and exported so the property can be proved rather than described: the thing being asserted
+ * is a NEGATIVE — "this response contains no session" — and a negative assertion written inline is
+ * the easiest kind in the estate to satisfy by accident. `calls.test.ts` drives it with each shape
+ * identity has ever served.
+ */
+export function sessionFieldIn(body: Json): string | null {
+  for (const path of SESSION_FIELDS) {
+    if (field(body, ...path) !== undefined) return path.join('.')
+  }
+  return null
 }
 
 /**
