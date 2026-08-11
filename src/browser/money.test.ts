@@ -17,7 +17,9 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { ENTRY_KINDS, isEntryKind } from '@cloudsforge/contracts-money'
 import {
+  CREDIT_ENTRY_KIND,
   MoneyError,
   decodeUintAt,
   digitRuns,
@@ -29,6 +31,33 @@ import {
   rendersAmount,
   weiToDecimal,
 } from './money.ts'
+
+test('every kind the fixture posts is one the LEDGER will actually accept', () => {
+  // ═══════════════════════════════════════════════════════════════════════════════════════════
+  // micro-org#424. The entry kinds are a closed set — `ENTRY_KINDS`, frozen and `as const`, with
+  // `EntryKind` and `isEntryKind()` derived from it — and micro-ledger's `validateEntryRequest`
+  // answers `400 invalid_entry` for anything outside it before it opens a transaction. An invented
+  // kind therefore posts NOTHING, which is why micro-foresight's `foresight.settlement_fee` booked
+  // no settlement fee for months and micro-tessera's `item_issue` brought no object into the books
+  // (micro-org#407 §3). Both hid in exactly the shape `creditSubject` used to have: a bare string
+  // in an object body on its way to `JSON.stringify`, read by nobody until run time.
+  //
+  // Here the cost lands on the monitor itself. A refused fixture means a journey cannot fund its
+  // account, so it fails or skips, and the estate's own synthetic monitoring is what goes wrong.
+  //
+  // Spelling is not the assertion; MEMBERSHIP is. The value under test is the very constant the
+  // call site sends, imported from `money.ts`, so this cannot pass while the posting is refused.
+  // ═══════════════════════════════════════════════════════════════════════════════════════════
+  assert.equal(CREDIT_ENTRY_KIND, 'deposit_credited')
+  assert.ok(isEntryKind(CREDIT_ENTRY_KIND), 'the credit kind must be in the closed vocabulary')
+  assert.ok(ENTRY_KINDS.includes(CREDIT_ENTRY_KIND))
+  // Every kind this file posts, on the same footing, so appending a second one here is enough to
+  // put it under the same guard. `reverseEntry` sends no kind — the ledger derives `reversal` from
+  // the entry being reversed — so this list is the whole of what beacon writes into the journal.
+  for (const kind of [CREDIT_ENTRY_KIND]) {
+    assert.ok(isEntryKind(kind), `${kind} is not in the ledger's closed set`)
+  }
+})
 
 test('an empty string is refused rather than read as zero', () => {
   // The whole file in one case. `BigInt('')` is 0n; `money('')` is a thrown error naming the field.
