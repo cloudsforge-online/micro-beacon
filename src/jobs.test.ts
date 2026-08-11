@@ -47,7 +47,7 @@ import assert from 'node:assert/strict'
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test'
 import { JobQueue, JobRunner, type Sql as JobsSql } from '@cloudsforge/jobs'
 import type postgres from 'postgres'
-import { JOURNEY_KIND, registerHandlers } from './jobs.ts'
+import { JOURNEY_KIND, journeyCadenceMs, registerHandlers } from './jobs.ts'
 import { listOpen } from './incidents.ts'
 import type { JourneyDefinition } from './journeys.ts'
 import {
@@ -213,5 +213,49 @@ describe('what a journey run is entitled to publish', { skip }, () => {
 
     await runOnce(fakeJourney(FAILS.name, PASSES.run))
     assert.deepEqual(await openIncidents(), [], 'one pass closes it — hysteresis, unchanged')
+  })
+})
+
+/**
+ * The per-journey cadence. Pure, so it runs without a database — deliberately OUTSIDE the
+ * `describe({ skip })` above, because the property it guards is one an environment with no Postgres
+ * must still be told about.
+ */
+describe('how often a journey is due', () => {
+  const journey = (intervalMs?: number): JourneyDefinition => ({
+    name: 'x',
+    title: 'x',
+    productGroup: 'Account',
+    service: 'identity',
+    critical: false,
+    ...(intervalMs === undefined ? {} : { intervalMs }),
+    run: async () => {},
+  })
+
+  it('uses the estate default for a journey that declares no cadence of its own', () => {
+    // Which is every journey but one. A cadence declared per journey by default would be a dozen
+    // numbers nobody revisits.
+    assert.equal(journeyCadenceMs(journey(), 300_000), 300_000)
+  })
+
+  it('A JOURNEY’S OWN CADENCE IS A FLOOR, AND A DEPLOYMENT CANNOT SPEED IT UP', () => {
+    /*
+     * ══════════════════════════════════════════════════════════════════════════════════════════
+     * `identity.register` declares thirty minutes because every run of it leaves a permanent row in
+     * a production identity table — 15,210 of them on mainnet, 2,231 a day, measured 2026-08-11
+     * (micro-org#390). A deployment setting `BEACON_JOURNEY_INTERVAL_MS` to sixty seconds would put
+     * the estate back to 1,440 rows a day, silently, from a variable that has nothing to do with
+     * registration.
+     *
+     * **Kills the mutation `Math.min`, and the mutation `journey.intervalMs ?? defaultMs`.** Both
+     * typecheck, both pass the case above, and both restore the row growth this whole change
+     * exists to stop. The slower-not-faster direction is asserted in both directions here because
+     * one assertion alone survives one of the two.
+     * ══════════════════════════════════════════════════════════════════════════════════════════
+     */
+    assert.equal(journeyCadenceMs(journey(1_800_000), 60_000), 1_800_000)
+    // And the other direction is honoured: slowing a monitor down is a decision an operator is
+    // allowed to make, so a longer default wins over the journey's floor.
+    assert.equal(journeyCadenceMs(journey(1_800_000), 7_200_000), 7_200_000)
   })
 })

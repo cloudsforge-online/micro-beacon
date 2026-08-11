@@ -670,5 +670,40 @@ export function unimplemented(): readonly Scenario[] {
   return T3_SCENARIOS.filter((s) => s.blocked === null && !IMPLEMENTATIONS[s.id])
 }
 
+/**
+ * Every browser journey this build can NAME, whatever the deployment can run.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **FOR THE SLO SEEDER, AND THE DIFFERENCE FROM `browserJourneys` IS THE WHOLE POINT.**
+ *
+ * `browserJourneys` answers "what will this process actually schedule", so it returns nothing
+ * without a browser and drops any scenario whose `needs` the deployment has no address for. That is
+ * right for the registry and WRONG for the seeder: the estate has `browser.bj-med-01` and
+ * `browser.bj-med-02` in its `journeys` table on mainnet — registered, gated, and skipping — while
+ * the container that would seed their objectives has no browser and would therefore describe
+ * neither. `sloseed.ts`'s `plan` then refuses them as "journeys this build cannot describe", which
+ * is the exact class of defect its own header warns about: a seeder whose output depends on which
+ * process invoked it.
+ *
+ * So this ignores `config` and `targets` entirely and asks each implementation only for the two
+ * facts the seeder needs — the name, and the owning service that cannot be derived from it. The
+ * definitions it builds are never RUN; `run` is present because the type has it.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+export function browserCatalogue(): readonly JourneyDefinition[] {
+  // Disabled and zero-timeout, so a definition built here cannot accidentally be scheduled into a
+  // real browser session by a future caller that mistakes this for the registry.
+  const config: BrowserConfig = { enabled: false, executablePath: '', timeoutMs: 0 }
+  const out: JourneyDefinition[] = []
+  for (const scenario of T3_SCENARIOS) {
+    const implementation = IMPLEMENTATIONS[scenario.id]
+    // A blocked or unimplemented scenario is not in the estate's `journeys` table either, so it has
+    // nothing to seed and naming it would produce the orphan refusal instead of the missing one.
+    if (scenario.blocked !== null || !implementation) continue
+    out.push(implementation(config, scenario, null))
+  }
+  return out
+}
+
 /** Implemented ids, so a test can check every one of them is a real, unblocked scenario. */
 export const IMPLEMENTED_IDS: readonly string[] = Object.keys(IMPLEMENTATIONS)
