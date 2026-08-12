@@ -196,6 +196,35 @@ export function registerServiceMetrics(metrics: Metrics): Metrics {
         kind: 'gauge',
         labels: ['status'],
       })
+      /**
+       * ════════════════════════════════════════════════════════════════════════════════════════
+       * **WHEN, NOT WHETHER. A SUITE THAT STOPPED BEING REPLAYED REPORTS ITS LAST VERDICT FOR
+       * EVER, AND `beacon_conformance_suites` CANNOT TELL YOU THAT.**
+       *
+       * `latestConformance` is `distinct on (suite) ... order by suite, ts desc` — the newest row
+       * per suite and nothing about its age. So a runner that dies, loses its account, or wedges
+       * mid-replay leaves eight `pass` suites standing indefinitely, and every conformance alert
+       * stays green off a measurement that stopped happening. That is the same shape of failure as
+       * micro-org#439 itself — a gate that is green because nothing asked it a question — arriving
+       * by a different route.
+       *
+       * `sum(beacon_conformance_suites) == 0` caught only the never-ran case, and it stops being
+       * able to catch anything the moment the first run lands. This is what replaces it: the age
+       * of the newest run per suite, which ONLY A REAL PUBLISHED RUN CAN MOVE. It is also why the
+       * scheduled runner needs no healthcheck of its own — see
+       * `deploy/compose/docker-compose.conformance.yml`. A runner that reports itself healthy
+       * while publishing nothing is precisely the bug; a timestamp it cannot advance without
+       * having actually compared something is not.
+       *
+       * Same precedent, same reasoning, same shape as `beacon_journey_last_run_timestamp_seconds`.
+       * ════════════════════════════════════════════════════════════════════════════════════════
+       */
+      .register({
+        name: 'beacon_conformance_last_run_timestamp_seconds',
+        help: 'When each suite was last replayed. A suite that stopped being replayed reports its last status for ever; this is the only series that catches that.',
+        kind: 'gauge',
+        labels: ['suite'],
+      })
       .register({
         name: 'beacon_incidents_open',
         help: 'Open incidents by severity.',
@@ -878,6 +907,11 @@ export function scrapeRefresh(deps: {
       deps.metrics.set('beacon_conformance_vectors', run.benign, { suite: run.suite, result: 'benign' })
       deps.metrics.set('beacon_conformance_vectors', run.breaking, { suite: run.suite, result: 'failed' })
       deps.metrics.set('beacon_conformance_vectors', run.skipped, { suite: run.suite, result: 'skipped' })
+      // Seconds, not milliseconds: the convention every `_timestamp_seconds` series in this file
+      // follows, and the one `time() - <series>` in an alert expression assumes.
+      deps.metrics.set('beacon_conformance_last_run_timestamp_seconds', run.ts.getTime() / 1000, {
+        suite: run.suite,
+      })
     }
 
     const open = await listOpen(deps.sql)

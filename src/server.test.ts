@@ -237,6 +237,24 @@ describe('the http surface', { skip }, () => {
     assert.match(body, /^beacon_conformance_suites\{status="pass"\} 0$/m)
   })
 
+  it('publishes the conformance staleness timestamp, per suite', async () => {
+    // The series `ConformanceCorpusNeverReplayed` moved onto once the scheduled runner existed
+    // (micro-org#439). `beacon_conformance_suites` reports the newest row per suite and nothing
+    // about its age, so eight `pass` suites stand for ever after the runner dies — a green gate
+    // measuring nothing, which is the shape of the bug the runner was built to fix.
+    await recordConformanceRun(db(sql), { suite: 'wallet', status: 'pass', identical: 57 })
+    const body = await (await call('/metrics', { token: TOKEN })).text()
+    assert.match(body, /^beacon_conformance_last_run_timestamp_seconds\{suite="wallet"\} \d+/m)
+  })
+
+  it('publishes NO conformance timestamp when no suite has ever run', async () => {
+    // Absent, not zero. A zero here is 1970, which reads as "last replayed 56 years ago" and would
+    // make the staleness alert fire with a number that is fiction. `absent()` is the never-ran arm
+    // of that alert and it needs this to genuinely not be there.
+    const body = await (await call('/metrics', { token: TOKEN })).text()
+    assert.equal(/beacon_conformance_last_run_timestamp_seconds\{/.test(body), false)
+  })
+
   it('NEVER counts a skipped suite as a passing one', async () => {
     // The same rule `conformance.ts` states and `gate.ts` enforces, now on the wire: a suite that
     // could not be run is not a suite that passed. A gauge that folded `skip` into `pass` would
