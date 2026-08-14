@@ -1,6 +1,6 @@
 {
   "name": "@cloudsforge/beacon",
-  "version": "2026.08.38",
+  "version": "2026.08.39",
   "private": true,
   "description": "The release gate. Synthetic probes and user journeys on a leased schedule, incidents with hysteresis and dedupe, SLOs whose error budget is integer arithmetic, conformance runs, Prometheus metrics, and a redacted public status projection that cannot leak a field it was not told about. A release promotes only if this service says so, and an unknown is never a pass.",
   "license": "MIT",
