@@ -41,27 +41,58 @@ Use a domain the estate can actually mail, or a reserved one, and **know which y
 Either is fine. What is not fine is a domain that resolves and that nobody reads: that is eight
 verification mails into a black hole and eight accounts that can never sign in.
 
+## Which identity to provision at
+
+**The one the estate declares, which is not always the one it runs.** `CF_IDENTITY_URL` in that
+estate's env file is the answer; unset means the in-compose `identity` container.
+
+This paragraph used to read "mainnet and testnet need separate pools — the accounts live in each
+network's own identity database", and it stopped being true when the two estates were given one
+identity (micro-org#459 stage 2). What replaced it is stricter, not looser:
+
+- **One identity database, so one namespace.** A pool provisioned "on testnet" is a set of rows in
+  the *mainnet* identity's `users` table. Nothing separates them but the addresses you choose.
+- **The addresses must still differ per estate**, and for the reason the slot table below already
+  gives. Sessions live in identity and identity is now shared, so two estates pointed at one
+  address are two journeys sharing an account — the hazard `parsePool`'s duplicate check exists to
+  refuse, reintroduced one layer up where it cannot see it. Mainnet holds `pool0…7@beacon.test`;
+  testnet holds `pool0…7@beacon-testnet.test`, provisioned 2026-08-16.
+- **`BEACON_TARGETS` must name that identity too.** It said `identity=http://identity:4000` on both
+  estates until 2026-08-16, which is a pool provisioned correctly at the shared identity and then
+  signed in at the local one: 401 on every authenticated journey, and the credential exchange 401s
+  with it. It now follows `CF_IDENTITY_URL` (micro-org#472).
+
 ## The procedure
 
-Run this on the app host, against the network you are provisioning. **Mainnet and testnet need
-separate pools** — the accounts live in each network's own identity database, and a pool provisioned
-on one proves nothing about the other.
+Run this on the app host, for the network you are provisioning, **against that network's declared
+identity**.
 
 ### 1. Register eight accounts
 
-Mainnet has a Turnstile in front of registration, so present beacon's service credential — the
-challenge bypass is the service principal (micro-org#361). Registration is rate-limited to **5 per
-60s per source address**, so this must be done in two batches or with a pause.
+Registration is behind a Turnstile, so present beacon's service credential — the challenge bypass is
+the service principal (micro-org#361). Two things about that exchange, both measured on 2026-08-16
+by getting them wrong:
+
+- The response field is **`token`**, not `accessToken`. `Bearer undefined` is not a 401; it is a 403
+  `challenge_required`, because an unusable bearer makes the route fall through to the challenge it
+  was meant to bypass (`challengeBypass` in identity's `server.ts` logs `reason: "malformed"` and
+  says so).
+- Registration is rate-limited to **5 per 60s per source address**, and a rejected attempt still
+  spends its slot. A failed run therefore costs the next run its first few registrations. Do it in
+  batches with a pause, and be ready to fill the gaps in a second pass — the pool must end up in
+  **slot order**, so merge by address rather than appending.
 
 ```sh
-# From inside the beacon container, which already holds BEACON_SERVICE_CREDENTIAL.
-# Note: the passwords are generated here and PRINTED ONCE. Capture them; there is no way to read
-# them back, and a lost one means re-provisioning that slot.
-docker exec cloudsforge-estate-beacon-1 node -e '
-  const { randomUUID } = require("node:crypto")
-  // ... exchange BEACON_SERVICE_CREDENTIAL at POST /service-tokens/exchange, then POST
-  // /auth/register eight times with a 15s pause every five, printing {email, password} as JSON.
-'
+# From inside the beacon container for the estate being provisioned, which already holds
+# BEACON_SERVICE_CREDENTIAL for that estate's declared identity.
+#
+# STDOUT carries the credential set and NOTHING else; progress goes to stderr. Redirect stdout
+# straight to a file. A password that reaches a terminal is a password in a scrollback buffer.
+docker exec cf-testnet-beacon-1 node -e '
+  const { randomBytes } = require("node:crypto")
+  // ... POST /service-tokens/exchange at CF_IDENTITY_URL, read `token`, then POST /auth/register
+  // eight times with the service token, a pause every four, writing [{email, password}] to stdout.
+' > /tmp/pool.json
 ```
 
 The output is the value of `BEACON_JOURNEY_ACCOUNTS`: a JSON array of `{"email","password"}`.
@@ -76,12 +107,13 @@ Either spend the eight links from the mailbox (if you chose a real domain), or �
 domain, where no mail is sent — mark them verified directly:
 
 ```sql
--- identity, on the network being provisioned. Narrow, and it names the eight addresses rather than
--- matching a pattern: this sets the column that decides whether an account may sign in, and a LIKE
--- here would verify every synthetic account in the table.
+-- The DECLARED identity's database — for testnet that is the mainnet postgres, not its own.
+-- Narrow, and it names the eight addresses rather than matching a pattern: this sets the column
+-- that decides whether an account may sign in, and a LIKE here would verify every synthetic
+-- account in the table. `pool_@beacon.test` would also match the other estate's pool.
 update users
    set email_verified_at = now()
- where email in ('pool0@beacon.test', … the eight you created …)
+ where email in ('pool0@beacon-testnet.test', … the eight you created …)
    and email_verified_at is null;
 ```
 
@@ -89,20 +121,32 @@ This is the same thing migration 13 did when it back-filled existing accounts as
 written out rather than hidden in a script because it is a write to an authentication column on a
 production table, and it should be read before it is run.
 
-### 3. Put it on the host and redeploy
+### 3. Prove they sign in, before touching anything
 
-`BEACON_JOURNEY_ACCOUNTS` goes wherever the estate's other beacon secrets live — the untracked
-`tokens.env` on the app host — and compose passes it through to the beacon service.
+One `POST /auth/login` per address at the declared identity, printing the status and nothing else.
+Two slots is enough to catch the mistakes that matter, and eight would spend the 10-per-minute
+login limit the journeys themselves need. A 403 here means step 2 was missed; a 401 means the pool
+was provisioned at one identity and is being offered to another, which is the whole reason this
+section exists.
+
+### 4. Put it on the host and redeploy
+
+`BEACON_JOURNEY_ACCOUNTS` goes wherever that estate's other beacon secrets live — the untracked
+`tokens.env` or `tokens.testnet.env` on the app host — and compose passes it through to the beacon
+service. Splice the file in place from the JSON you captured, rather than pasting it: the value
+never needs to be displayed to be installed, and this is the step that most invites displaying it.
 
 Deploy with `scripts/release-deploy.sh`. A bare `docker compose up` drops `mainnet.env`.
 
-### 4. Check it took
+### 5. Check it took
 
 ```sh
-# Every journey that needed a session should stop skipping within one cycle.
+# Every journey that needed a session should stop skipping within one cycle. Drop `-i` and add
+# `</dev/null`: in a script fed to bash through a pipe, `docker exec -i` consumes the REST OF THE
+# SCRIPT as the container's stdin, and everything after this line silently does not run.
 docker exec cloudsforge-estate-postgres-1 psql -U cloudsforge -d beacon -tAc \
   "select journey, status, count(*) from journey_runs
-    where started_at > now() - interval '20 minutes' group by 1,2 order by 1"
+    where started_at > now() - interval '20 minutes' group by 1,2 order by 1" </dev/null
 ```
 
 A skip mentioning `BEACON_JOURNEY_ACCOUNTS` means the variable did not reach the container. A skip
