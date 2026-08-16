@@ -152,6 +152,65 @@ function refuseIfEnvironmentExpired(reason: string | null, where: string): void 
 }
 
 /**
+ * Is the identity this estate signs in at the identity that feeds this estate's read models?
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **A JOURNEY MUST NOT ASSERT A PROPERTY THE TOPOLOGY HAS MADE UNTESTABLE.**
+ *
+ * Under the combined view (doc 38) testnet has no identity of its own: `BEACON_TARGETS` names
+ * `${CF_IDENTITY_URL}`, which is the mainnet identity, because that is where the tokens testnet's
+ * services verify are minted (micro-deploy#149). One consequence was not designed and was found by
+ * these three journeys going red: `event_subscriptions` in that identity holds bare service names
+ * — `http://activity:4000/ingest` — which resolve inside **mainnet's** compose network and nowhere
+ * else. A session committed for a testnet account therefore reaches mainnet's activity, and
+ * testnet's activity, whose only producer identity has ever been, receives nothing again.
+ *
+ * Measured 2026-08-16: activity's inbox on both estates carries three topics, all `identity.*`, and
+ * testnet's newest record is 10:32:18 — the minute this journey pool stopped signing in locally.
+ *
+ * So the assertion "a fact committed in identity reaches this estate's activity" is not failing on
+ * testnet; it is **not a question testnet can answer**, and there is no product change that would
+ * make it green short of choosing a cross-estate delivery mechanism. micro-org#474 holds that
+ * decision, with the `identity.user.deleted` half — sixteen subscribers, none of them testnet's —
+ * as the part that actually costs something.
+ *
+ * A red journey for an untestable property is how a monitor gets muted, so these skip instead. A
+ * skip is **not green** (`journeys.ts` rule 2: the metric emits 0.5 and the gate counts it exactly
+ * as a failure), which is the point — the coverage is genuinely gone and the status page should not
+ * claim otherwise.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ *
+ * ── WHY THIS IS DECLARED AND NOT INFERRED ─────────────────────────────────────────────────────
+ *
+ * The first version of this guard worked it out from the targets: an in-compose address is a bare
+ * service name, a borrowed identity is a public FQDN, so a dot in one hostname and not the other
+ * meant two estates. It reads well and it is wrong the moment an estate is addressed by IP —
+ * `10.0.0.4:4000` and `10.0.0.4:4001` are one estate with dots in both, and every journey here
+ * would have skipped on it while reporting a tidy reason. That is the estate's own recurring
+ * defect: two readings of one question that are free to disagree.
+ *
+ * So compose declares it, from the SAME variable that makes it true. `BEACON_IDENTITY_FOREIGN:
+ * ${CF_IDENTITY_URL:+true}` — `:+` expands to `true` only when `CF_IDENTITY_URL` is set and
+ * non-empty, which is exactly and only when this estate's identity is somebody else's. Mainnet
+ * gets the empty string; testnet gets `true`; neither can drift from `BEACON_TARGETS` on the line
+ * above it, because both are the same expansion of the same variable.
+ */
+function skipUnlessIdentityFeedsThisEstate(ctx: JourneyContext): void {
+  // Read here rather than through `Env`, the way `serviceCredential()` reads its own, and treated
+  // as a boolean rather than parsed: anything other than the empty string compose produces when
+  // `CF_IDENTITY_URL` is unset means the identity is elsewhere.
+  if ((process.env['BEACON_IDENTITY_FOREIGN'] ?? '').trim() === '') return
+  ctx.skip(
+    `this estate's identity is ${ctx.target('identity')}, which is another estate's. That ` +
+      `identity's event subscriptions are bare service names on ITS compose network, so nothing ` +
+      `it commits can reach this estate's activity — and identity is the only producer activity ` +
+      `has ever had. This journey therefore has nothing to observe. micro-org#474 holds the ` +
+      `cross-estate delivery decision; a skip rather than a fail because no product change makes ` +
+      `it green.`,
+  )
+}
+
+/**
  * How long the bus is given to carry one fact.
  *
  * Measured, not guessed: against the dev estate on 2026-08-03 a registration reached activity's
@@ -194,6 +253,7 @@ export const ECOSYSTEM_EVENT_BUS: JourneyDefinition = {
   // release only by failing, which is the signal it is here to give.
   critical: false,
   async run(ctx) {
+    skipUnlessIdentityFeedsThisEstate(ctx)
     const identity = ctx.target('identity')
     const activity = ctx.target('activity')
 
@@ -339,6 +399,10 @@ export const ECOSYSTEM_ONE_ACTIVITY: JourneyDefinition = {
   service: 'hub-api',
   critical: false,
   async run(ctx) {
+    // The whole journey is a comparison of two projections of a feed that, on an estate whose
+    // identity is elsewhere, no producer fills. Guarded at the top rather than at the first read:
+    // there is nothing further down worth running once the feed is known to be empty by topology.
+    skipUnlessIdentityFeedsThisEstate(ctx)
     const identity = ctx.target('identity')
     const activity = ctx.target('activity')
     const hub = ctx.target('hub-api')
@@ -564,6 +628,24 @@ export const ECOSYSTEM_ONE_ACCOUNT: JourneyDefinition = {
       )
     })
 
+    await ctx.step('an unauthenticated read of each is refused', async () => {
+      // Asserted, not assumed, and asserted on BOTH services. A monitor that only ever checks the
+      // happy path cannot tell an authenticated endpoint from an open one, and a per-service
+      // suite proving its own route is gated says nothing about the other two.
+      const hubAnon = await call(ctx, `${hub}/v1/dashboard`)
+      ctx.assert(hubAnon.status === 401, `hub-api answered ${hubAnon.status} without a token`)
+      const activityAnon = await call(ctx, `${activity}/feed`)
+      ctx.assert(activityAnon.status === 401, `activity answered ${activityAnon.status} without a token`)
+    })
+
+    // Moved ahead of the attribution step below on 2026-08-16, and the order is the point. The
+    // three steps above hold on every estate; only the fourth needs identity and activity to be in
+    // the same one, and it abandons the run when they are not. Guarding at the top of this journey
+    // — which is what the other two do — would have thrown away the identity/hub agreement check
+    // on testnet, and that is the check that caught micro-org#472's hub-api half. So the guard sits
+    // here, the steps that can still speak have already spoken, and their results are on the run.
+    skipUnlessIdentityFeedsThisEstate(ctx)
+
     await ctx.step('activity attributes the account’s own events to it', async () => {
       const found = await pollFor(ctx, BUS, async () => {
         const result = await call(ctx, `${activity}/feed?limit=20`, { token: subject.token })
@@ -576,16 +658,6 @@ export const ECOSYSTEM_ONE_ACCOUNT: JourneyDefinition = {
         (found as readonly FeedRecord[]).every((record) => record.userId === subject.userId),
         `activity's feed for this token carries records belonging to another user id`,
       )
-    })
-
-    await ctx.step('an unauthenticated read of each is refused', async () => {
-      // Asserted, not assumed, and asserted on BOTH services. A monitor that only ever checks the
-      // happy path cannot tell an authenticated endpoint from an open one, and a per-service
-      // suite proving its own route is gated says nothing about the other two.
-      const hubAnon = await call(ctx, `${hub}/v1/dashboard`)
-      ctx.assert(hubAnon.status === 401, `hub-api answered ${hubAnon.status} without a token`)
-      const activityAnon = await call(ctx, `${activity}/feed`)
-      ctx.assert(activityAnon.status === 401, `activity answered ${activityAnon.status} without a token`)
     })
   },
 }
