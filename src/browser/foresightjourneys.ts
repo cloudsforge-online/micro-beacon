@@ -38,7 +38,7 @@ import { GROUPS } from '../groups.ts'
 import type { BrowserConfig, BrowserPage, Collected } from './driver.ts'
 import type { Scenario } from './catalogue.ts'
 import { surfaceJourney } from './journeys.ts'
-import { money, poolOf, stakeOf, stakersOf, weiToDecimal, type ChainAccess } from './money.ts'
+import { money, poolOf, stakeOf, stakersByContract, weiToDecimal, type ChainAccess } from './money.ts'
 
 /* ------------------------------------------------------------------ reading the service */
 
@@ -164,11 +164,22 @@ const portfolioAgainstChain: Implementation = (config, scenario) =>
 
       const found = await ctx.step('find a staked market, from the chain’s own logs', async () => {
         const listed = await markets(ctx)
-        for (const market of listed) {
-          if (market.contractAddress === null) continue
-          const stakers = await stakersOf(chain, market.contractAddress)
-          if (stakers.length > 0) {
-            return { market, contract: market.contractAddress, staker: stakers[0] as string }
+        const deployed = listed.filter(
+          (m): m is MarketRow & { contractAddress: string } => m.contractAddress !== null,
+        )
+        // ONE sweep, not one per market. The node caps a log query at 10,000 blocks, so a scan of
+        // this chain is several round trips already; repeating them per market would multiply that
+        // by the length of the list for exactly the same logs. See `stakersByContract`.
+        const byContract = await stakersByContract(
+          chain,
+          deployed.map((m) => m.contractAddress),
+        )
+        // Iterated over the SERVICE's order rather than the map's, so the market this journey picks
+        // is the first one a reader would meet and not whichever contract the node listed first.
+        for (const market of deployed) {
+          const staker = (byContract.get(market.contractAddress.toLowerCase()) ?? [])[0]
+          if (staker !== undefined) {
+            return { market, contract: market.contractAddress, staker }
           }
         }
         // ── A LOUD SKIP, NOT A QUIET PASS ────────────────────────────────────────────────────
@@ -288,24 +299,71 @@ const rulesWithoutCredential: Implementation = (config, scenario) =>
     critical: scenario.gate,
     async verify(ctx, page, collected, base) {
       await ctx.step('the refusal list renders for a reader with no account', async () => {
-        const text = await bodyText(page, config.timeoutMs)
-        // The two halves of the page: what may be a market, and what may never be. Asserted
-        // together, because a page that renders only the allowlist has dropped the whole point.
+        // ── HELD TO `GET /categories`, NOT TO THE HEADINGS ──────────────────────────────────────
+        // This step used to search the page for "what can be a market" and "what cannot". The
+        // headings have read "Fair game" and "Off the table" since `rules.tsx` was rewritten, so on
+        // 2026-08-16 it reported a page rendering the WHOLE allowlist and the WHOLE refusal list as
+        // "rendered 3086 characters and no allowlist". A monitor keyed to copy goes red every time
+        // the copy improves, and a monitor that cries wolf is one nobody reads.
+        //
+        // `GET /categories` is unauthenticated by the same argument this journey exists to check,
+        // and it is what the page renders — so it is what the page is now held to, item by item.
+        // That cannot go stale on a rewording, and it is strictly stronger in the direction that
+        // matters: headings above an empty list passed the old assertion and fail this one.
+        const catalogue = (await foresightJson(ctx, '/categories')) as {
+          version?: unknown
+          categories?: readonly { title?: unknown }[]
+          refusals?: readonly { reason?: unknown }[]
+        }
+        const titles = (catalogue.categories ?? [])
+          .map((c) => String(c['title'] ?? '').trim())
+          .filter((t) => t !== '')
+        const refusals = (catalogue.refusals ?? [])
+          .map((r) => String(r['reason'] ?? '').trim())
+          .filter((r) => r !== '')
+        // The fixture first: with nothing published there is nothing to render, and asserting that
+        // an empty page matches an empty list is the check that cannot fail.
         ctx.assert(
-          /what can be a market/i.test(text),
-          `${base} rendered ${text.trim().length} characters and no allowlist`,
+          titles.length > 0 && refusals.length > 0,
+          `GET /categories publishes ${titles.length} categor(ies) and ${refusals.length} ` +
+            'refusal(s). A platform that has published no refusals has nothing a reader can hold ' +
+            'it to, which is the defect this journey is named for',
         )
+
+        // ── COMPARED CASE-INSENSITIVELY, BECAUSE `innerText` APPLIES `text-transform` ────────────
+        // `.fs-rule__title` is `text-transform: capitalize`, so the service publishes "Protocol and
+        // network events" and `innerText` returns "Protocol And Network Events". An exact
+        // `includes` reported a page rendering the entire allowlist as rendering none of it — the
+        // second false red this journey produced in one day, after the headings. What is being
+        // asserted is that the words are on the page, and CSS case is not one of the words.
+        const rendered = (await bodyText(page, config.timeoutMs)).toLowerCase().replace(/\s+/g, ' ')
+        const shows = (published: string): boolean =>
+          rendered.includes(published.toLowerCase().replace(/\s+/g, ' '))
+        for (const title of titles) {
+          ctx.assert(
+            shows(title),
+            `${base} does not render the category "${title}" that GET /categories publishes — a ` +
+              'question in it can go live, and no reader of this page would know that',
+          )
+        }
+        for (const reason of refusals) {
+          // A prefix rather than the whole sentence: these run to several lines, and the shorter
+          // the compared string the fewer ways rendering can differ from publishing without the
+          // refusal itself being absent.
+          const head = reason.slice(0, 60)
+          ctx.assert(
+            shows(head),
+            `${base} does not render the refusal beginning "${head}" — the refusal list is the ` +
+              'half of this page that can be held against the platform',
+          )
+        }
+        // The version, as published: a page showing a list under no version leaves a reader unable
+        // to say WHICH allowlist they were shown, which is the whole of "changes by release instead
+        // of by exception".
         ctx.assert(
-          /what cannot/i.test(text),
-          `${base} renders the categories it allows and not the ones it refuses — the refusal ` +
-            'list is the half that can be held against the platform',
-        )
-        // The published refusals themselves, so that a page rendering the headings with an empty
-        // list underneath is red. An empty allowlist is a 200 and a true answer elsewhere in this
-        // estate; here it would mean the platform has published no refusals at all.
-        ctx.assert(
-          /Allowlist version/i.test(text),
-          `${base} does not state which version of the allowlist a reader is looking at`,
+          shows(`Allowlist version ${String(catalogue.version ?? '')}`),
+          `${base} does not state that it is showing allowlist version ` +
+            `${String(catalogue.version ?? '(none published)')}`,
         )
       })
 
@@ -405,28 +463,35 @@ const filterSetMatchesService: Implementation = (config, scenario) =>
  * BJ-FOR-01 ★ — open one market, and read it in the order the argument is made.
  *
  * ══════════════════════════════════════════════════════════════════════════════════════════════
- * **THIS JOURNEY IS RED ON THIS ESTATE, AND THE RED IS A REAL DEFECT THAT NOTHING ELSE SEES.**
+ * **THIS JOURNEY WAS RED FOR A REAL DEFECT, AND THE DEFECT IS FIXED. THE ACCOUNT STAYS.**
  *
  * `foresight.<apex>/markets/<id>` is both a client route and an API resource, split by the gateway
- * on `Accept: application/json` (`deploy/gateway/dynamic/estate-web.yml`). The HTML the
- * document navigation receives is cacheable and carries no `Vary: Accept`, so Chromium's HTTP cache
- * answers the bundle's OWN `fetch()` for the same URL out of that entry — with `text/html`. The
- * page then sits on "Loading the market" for ever.
+ * on `Accept: application/json` (`deploy/gateway/dynamic/estate-web.yml`). The HTML the document
+ * navigation received was cacheable and carried no `Vary: Accept`, so Chromium's HTTP cache
+ * answered the bundle's OWN `fetch()` for the same URL out of that entry — with `text/html`. The
+ * page then sat on "Loading the market" for ever.
  *
- * Driven and isolated before this was written, in the browser, three ways:
+ * Driven and isolated in the browser, three ways, which is how it was proved rather than guessed:
  *
  *   * `fetch('/markets/<id>', {headers:{accept:'application/json'}})` from the INDEX page, which
- *     has never navigated to that URL → `application/json`. Works.
+ *     has never navigated to that URL → `application/json`. Worked.
  *   * the same fetch after navigating the document to that URL → `text/html`. Broken.
- *   * the same fetch again with `cache: 'no-store'` → `application/json`. Works.
+ *   * the same fetch again with `cache: 'no-store'` → `application/json`. Worked.
  *
- * So every shared link, every reload and every bookmark into a Foresight market is broken, and
- * entering from the list is the only path that works. It answers 200 throughout, logs no console
- * error and fails no request — `beacon smoke` visits `/` and is 17/17 while this is true.
+ * So every shared link, every reload and every bookmark into a Foresight market was broken, and
+ * entering from the list was the only path that worked. It answered 200 throughout, logged no
+ * console error and failed no request — `beacon smoke` visits `/` and was 17/17 while this was true.
  *
- * The fix belongs to `micro-deploy` (a `Vary: Accept` on the web router, or not overloading the
- * path) and is not this repository's to make. The journey is declared anyway, and left to fail:
- * beacon's rule 1 is that an assertion failure means the PRODUCT is broken, and it is.
+ * The fix belonged to `micro-deploy` and was made there: on 2026-08-16 a document navigation to
+ * `/markets/<id>` answers `vary: Accept,Origin` AND `cache-control: no-store`, so the cache has no
+ * entry to reuse and could not match across the header if it had one. This journey went red for a
+ * product defect, the product was fixed, and it is green — which is the whole loop beacon exists
+ * for. The account is left standing because a defect that is invisible to a smoke suite, answers
+ * 200 and breaks every shared link is one worth being able to recognise a second time.
+ *
+ * WHAT IT WAS **NOT**: for a day after the gateway was fixed this journey still errored, with
+ * `ReferenceError: __name is not defined` — a bug in the step below rather than in anything it
+ * loads. Blaming the known product defect for it cost that day. See the step's own note.
  * ══════════════════════════════════════════════════════════════════════════════════════════════
  */
 const marketPageOrder: Implementation = (config, scenario) =>
@@ -467,26 +532,61 @@ const marketPageOrder: Implementation = (config, scenario) =>
       })
 
       await ctx.step('the terms come before the stake form, in document order', async () => {
+        // ── NO NAMED FUNCTION INSIDE AN `evaluate`, AND THE REASON IS NOT STYLE ──────────────────
+        // This block held `const at = (pattern) => text.search(pattern)` and threw
+        // `ReferenceError: __name is not defined` in the page on every run. Playwright ships a
+        // callback to the browser by calling `toString()` on it, and the browser has none of this
+        // process's scope — but `tsx`/esbuild runs with `keepNames`, which rewrites every function
+        // BOUND TO A NAME as `__name(fn, "at")` so that `fn.name` survives minification. The
+        // helper's name survives; `__name` does not travel, and the page throws before the first
+        // assertion. It cost `dexjourneys.ts` a run before it cost this one.
+        //
+        // The rule that follows: inside `page.evaluate` and `page.addInitScript`, use anonymous
+        // expressions only, or pass source TEXT (`PROVIDER_SOURCE` in `dexjourneys.ts`), which no
+        // transpiler touches. The searches are inline here for exactly that reason.
+        //
+        // ── AND IT READS `main`, NOT `body`, WHICH IS THE SECOND HALF OF THE SAME RUN ───────────
+        // Against `document.body` this step failed with "the pool appears before the close time"
+        // on a page whose order is correct. The estate's masthead carries a mining banner reading
+        // "Mine for the CloudsForge **pool** in your browser", so the first match for /pool/ was in
+        // the site chrome, above everything — the journey was measuring the header of every page in
+        // the estate rather than this market. `@cloudsforge/ui`'s `MainRegion` gives every surface
+        // a `<main id="cf-main">`, and the content region is the only thing this assertion is about.
         const order = await page.evaluate(() => {
-          const text = document.body?.innerText ?? ''
-          const at = (pattern: RegExp): number => text.search(pattern)
+          const region = document.querySelector('main') as HTMLElement | null
+          const text = (region ?? document.body)?.innerText ?? ''
           return {
-            criteria: at(/resolution criteria|how this settles|settles from/i),
-            source: at(/source|settling source|resolution source/i),
-            close: at(/close|closes/i),
-            pool: at(/pool|staked on/i),
+            scoped: region !== null,
+            // The page's OWN words for each of the three, not a guess at them: "What settles this",
+            // "Closes in …" / "Closes to new stakes", "Where the money is" / "Total staked".
+            criteria: text.search(/what settles this|resolution criteria|how this settles/i),
+            close: text.search(/closes (in|to)|close time|closing time/i),
+            pool: text.search(/where the money is|total staked/i),
           }
         })
-        // A stake button above the terms is a signature line above a contract. Only the pairs the
-        // page actually rendered are compared: a market with no pool panel has nothing to be above.
-        if (order.criteria >= 0 && order.pool >= 0) {
+        ctx.assert(
+          order.scoped,
+          `${page.url()} renders no <main> region, so document order could only be read off the ` +
+            'whole body — including the masthead, which is not this page',
+        )
+        // Not `if (found)`: a market page with no money band at all is a defect in itself, and a
+        // silently skipped comparison is how this assertion would go quiet on a rename instead of
+        // going red. The terms are allowed to be missing — a market may publish none — the pool
+        // is not.
+        ctx.assert(
+          order.pool >= 0,
+          `${page.url()} renders no pool band. A market page that never says what is staked on it ` +
+            'is not a market page',
+        )
+        // A stake button above the terms is a signature line above a contract.
+        if (order.criteria >= 0) {
           ctx.assert(
             order.criteria < order.pool,
             'the pool panel appears before the resolution criteria — the reader is offered the ' +
               'stake before the terms it settles under',
           )
         }
-        if (order.close >= 0 && order.pool >= 0) {
+        if (order.close >= 0) {
           ctx.assert(
             order.close < order.pool,
             'the pool appears before the close time — a reader can be shown what they might win ' +
@@ -510,9 +610,15 @@ const marketPageOrder: Implementation = (config, scenario) =>
  * That is the assertion this tier is for. A stubbed suite proves the arithmetic; only a live one
  * proves the numbers.
  *
- * It reads the market page the same way BJ-FOR-01 does, so on an estate where the deep link is
- * broken (see that journey's header) this fails for the same reason — correctly, and once the
- * gateway sends `Vary: Accept` both go green together.
+ * It reads the market page the same way BJ-FOR-01 does, so while the deep link was broken (see that
+ * journey's header) this failed for the same reason, correctly. The gateway sends `Vary: Accept`
+ * now and that half is fixed for both.
+ *
+ * WHAT THIS SKIPS FOR TODAY IS NOT THAT, and the difference matters: every market this estate serves
+ * holds a zero pool, so the fixture below finds nothing to compare and says so. That is the honest
+ * answer on a platform nobody has staked on yet — "the page rendered nothing and the contract holds
+ * nothing" is a check that cannot fail, and reporting it as a pass is how a monitor becomes
+ * decoration. It goes green on its own the first time anybody stakes.
  */
 const poolAgainstChain: Implementation = (config, scenario) =>
   surfaceJourney({
