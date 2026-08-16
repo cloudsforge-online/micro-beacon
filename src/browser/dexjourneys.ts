@@ -337,6 +337,41 @@ function configuredKey(): Uint8Array | null {
   return out
 }
 
+/**
+ * The provider, as SOURCE TEXT rather than as a function — and it has to be text.
+ *
+ * Playwright serialises a function argument to `addInitScript` with `toString()` and evaluates the
+ * result in the page. This process runs its TypeScript through `tsx`, which is esbuild, which has
+ * `keepNames` on, so `const request = async (…) => {…}` is emitted as
+ * `const request = __name(async (…) => {…}, "request")`. `__name` is a module helper that exists
+ * here and nowhere in the browser, so the injected text died on `ReferenceError: __name is not
+ * defined` before installing anything, `window.ethereum` stayed undefined, and the swap page said —
+ * correctly — that no wallet was installed. The journey then reported the product broken for a
+ * defect that was entirely its own.
+ *
+ * It cost hours to find because every symptom pointed away from it: an inline arrow passed to
+ * `evaluate` carries no name binding and is left alone, so every other evaluation in this file
+ * worked, and a hand-written `.mjs` reproduction of the same injection worked too — the one thing
+ * it did not reproduce was the transpiler. A string is not transpiled by anything.
+ *
+ * `isBeacon` rather than `isMetaMask`: nothing in `exchange-web` reads either — it asks only
+ * whether `request` is a function — and claiming to be a wallet this is not would make any future
+ * vendor-specific branch take the wrong side for a reason nobody could find.
+ */
+const PROVIDER_SOURCE = `
+(() => {
+  const request = async (args) => {
+    const raw = await window.beaconWalletRequest(args.method, JSON.stringify(args.params ?? []))
+    const parsed = JSON.parse(raw)
+    if (parsed.ok) return parsed.result
+    const error = new Error(parsed.message ?? 'the wallet refused')
+    error.code = parsed.code ?? -32603
+    throw error
+  }
+  window.ethereum = { isBeacon: true, request, on: () => {}, removeListener: () => {} }
+})()
+`
+
 interface SentTransaction {
   readonly to: string
   readonly data: string
@@ -489,25 +524,7 @@ async function installWallet(
   }
 
   await page.exposeFunction('beaconWalletRequest', answer)
-  await page.addInitScript(() => {
-    const request = async (args: { method: string; params?: readonly unknown[] }): Promise<unknown> => {
-      const raw = await window.beaconWalletRequest(args.method, JSON.stringify(args.params ?? []))
-      const parsed = JSON.parse(raw) as {
-        ok: boolean
-        result?: unknown
-        code?: number
-        message?: string
-      }
-      if (parsed.ok) return parsed.result
-      const error = new Error(parsed.message ?? 'the wallet refused') as Error & { code?: number }
-      error.code = parsed.code ?? -32603
-      throw error
-    }
-    // `isBeacon` rather than `isMetaMask`. Nothing in `exchange-web` reads either — it asks only
-    // whether `request` is a function — and claiming to be a wallet this is not would make any
-    // future vendor-specific branch take the wrong side for a reason nobody could find.
-    window.ethereum = { isBeacon: true, request, on: () => {}, removeListener: () => {} }
-  })
+  await page.addInitScript(PROVIDER_SOURCE)
 
   ctx.cleanup(() => {
     // Nothing to undo in the page — it is torn down with the context — but the count belongs in the
@@ -588,6 +605,18 @@ const swapThroughTheGateway: Implementation = (config, scenario) =>
     config,
     surface: 'exchange',
     critical: scenario.gate,
+    // Seven minutes, and the only browser journey that asks for more than the tier's two.
+    //
+    // Everything up to the press is page work and fits inside 120s with room. What does not is the
+    // wait AFTER it: `THE CHAIN SAYS THE SWAP SUCCEEDED` polls for a receipt for five minutes on
+    // its own, because a transaction is not mined when it is accepted — EMBER's block interval is
+    // the thing being waited on, and on a chain at its difficulty floor that interval is neither
+    // constant nor a number this process gets to choose (the step's own comment carries the
+    // measurements). Both earlier drives signed a swap that succeeded on chain and were reported
+    // red anyway: once as `journey exceeded 120000ms` (0xe52a2974…8207, block 18188) and once as
+    // "in a mempool the chain is not mining" (0x11a647bb…b2eb, block 18199, mined 83 seconds after
+    // the poll gave up). Seven minutes is the five-minute poll plus the page work in front of it.
+    deadlineMs: 420_000,
     async verify(ctx, page, _collected, base) {
       const chain = chainOf(ctx)
 
@@ -649,11 +678,18 @@ const swapThroughTheGateway: Implementation = (config, scenario) =>
        * The swap page takes both sides from the query string, and `from=native` makes the router's
        * path start at the wrapped address. So the token to receive is whichever of the pair's two
        * tokens is NOT the wrapped one — and rather than infer that from a symbol string, this asks
-       * the page: with the wrapped address as `to` the path is [wrapped, wrapped], for which the
-       * factory registers nothing, and the product says so in as many words. Exactly one of the two
-       * candidates leaves a pool to trade against, which makes this deterministic rather than a
-       * heuristic. The choice is then verified against the chain once the router appears, below.
+       * the page: offered the wrapped address as `to`, `swap.tsx` resolves both sides to the same
+       * token and refuses. Exactly one of the two candidates leaves something to trade against,
+       * which makes this deterministic rather than a heuristic. The choice is then verified against
+       * the chain once the router appears, below.
+       *
+       * BOTH refusals count, and which one appears is the product's business: `sameAsset` fires
+       * when the wrapped address resolves to the same token the native side already is, and
+       * `hasPool` fires when the address is not one the deployment lists at all. Matching only the
+       * second would take the wrapped side as the answer the moment the first is the one shown, and
+       * a swap along [wrapped, wrapped] reverts — a failure this journey would have authored.
        */
+      const REFUSED = /no pool for this pair|choose two different tokens/i
       const token = await ctx.step('choose the token to receive, from the pair itself', async () => {
         for (const candidate of [found.pair.token1, found.pair.token0]) {
           await page.goto(pageAt(base, '', { from: 'native', to: candidate }), {
@@ -662,7 +698,20 @@ const swapThroughTheGateway: Implementation = (config, scenario) =>
           await page.waitForLoadState('networkidle', { timeout: config.timeoutMs }).catch(() => {})
           await page.waitForTimeout(2_000)
           const text = await actionText(page)
-          if (!/no pool for this pair/i.test(text)) return candidate
+          // `useWalletAddress` asks `eth_accounts` on mount and the injected provider answers with
+          // the address, so the panel is past its connect state here without a press — which is
+          // what makes the refusals above readable at all. Asserted rather than skipped over: a
+          // provider that failed to install shows a message about the WALLET, which matches neither
+          // refusal, and the loop would otherwise read that as "this candidate is tradable" and
+          // take the wrapped side.
+          ctx.assert(
+            !/no wallet is installed/i.test(text),
+            `${page.url()} says no wallet is installed after one was injected before any of its ` +
+              'own script ran. `getProvider()` reads `window.ethereum` and requires `request` to ' +
+              'be a function; the object installed has one, unless the init script itself threw — ' +
+              'see `PROVIDER_SOURCE`.',
+          )
+          if (!REFUSED.test(text)) return candidate
         }
         stop(
           ctx,
@@ -773,7 +822,14 @@ const swapThroughTheGateway: Implementation = (config, scenario) =>
       })
 
       await ctx.step('THE CHAIN SAYS THE SWAP SUCCEEDED', async () => {
-        for (let attempt = 0; attempt < 60; attempt += 1) {
+        // Five minutes, and the number is measured rather than picked. EMBER testnet's intervals
+        // between blocks 18185 and 18200 on 2026-08-16 were 7, 15, 42, 79, 19, 13, 12, 14, 6, 59,
+        // 28, 132, 16, 83 and 75 seconds: a mean near 40 and a tail past two. A two-minute poll
+        // reported "in a mempool the chain is not mining" over a transaction that mined 83 seconds
+        // later, which is a monitor calling a chain broken for running at its own speed. A chain
+        // that has genuinely stopped still fails here — it just gets the length of its worst
+        // observed gap, twice over, to prove it has not.
+        for (let attempt = 0; attempt < 100; attempt += 1) {
           const receipt = (await chainRpc(chain, 'eth_getTransactionReceipt', [hash.hash])) as {
             status?: unknown
             to?: unknown
@@ -795,11 +851,11 @@ const swapThroughTheGateway: Implementation = (config, scenario) =>
             )
             return
           }
-          await page.waitForTimeout(2_000)
+          await page.waitForTimeout(3_000)
         }
         ctx.assert(
           false,
-          `${hash.hash} was accepted by the node two minutes ago and has no receipt. It is in a ` +
+          `${hash.hash} was accepted by the node five minutes ago and has no receipt. It is in a ` +
             'mempool the chain is not mining, which is a chain fault rather than an exchange one — ' +
             'and the page has already told the reader it was sent.',
         )

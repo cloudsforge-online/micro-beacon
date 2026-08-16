@@ -28,26 +28,21 @@ interface HTMLAnchorElement {
   readonly href: string
 }
 
-/**
- * The two members BJ-DEX-02 needs, and the reason `window` appears here at all.
+/*
+ * `window` IS DELIBERATELY NOT DECLARED, and BJ-DEX-02 is the reason it looks like it should be.
  *
- * Forge Exchange cannot be signed in a browser with no wallet, and the Chromium beacon drives has
- * no extensions. So `dexjourneys.ts` installs a provider before any of the page's own script runs —
- * `exchange-web/src/lib/wallet.ts` reads `window.ethereum` and requires only that `request` be a
- * function — and that provider forwards every call to a signer in the Node process through the
- * binding `page.exposeFunction` installs. Neither member exists in this process; both are declared
- * for the closures that are serialised into the browser, exactly as `document` is above.
+ * That journey installs an EIP-1193 provider — `window.ethereum` — before any of the exchange's own
+ * script runs, and the provider calls back into this process through the binding
+ * `page.exposeFunction('beaconWalletRequest', …)` installs. Both names are browser-side, so the
+ * obvious move is to declare them here beside `document`. It was declared here, and it was wrong:
+ * the provider is passed to `addInitScript` as SOURCE TEXT, not as a closure, because `tsx`'s
+ * esbuild rewrites a named function to `__name(fn, "name")` and that helper does not exist in a
+ * page — see `PROVIDER_SOURCE` in `dexjourneys.ts` for the failure that taught this. Text is not
+ * type-checked, so a declaration for it would check nothing while implying it did.
  *
- * `ethereum` is `unknown` rather than a provider interface on purpose: the shape is the PRODUCT's
- * to define, `wallet.ts` narrows it there, and a second definition here would be the copy that
- * drifts. `beaconWalletRequest` takes and returns JSON strings so that the process boundary carries
- * no types across it — a `bigint` or an `Error` crossing a serialiser silently is how a signer ends
- * up broadcasting something other than what it was asked to sign.
+ * Declare `window` here the day a genuine `evaluate` closure needs it, one member at a time, per
+ * the rule at the top of this file.
  */
-declare const window: {
-  ethereum?: unknown
-  beaconWalletRequest(method: string, params: string): Promise<string>
-}
 
 /** BJ-ACC-02 reads the values three inputs kept after a refusal. */
 interface HTMLInputElement {

@@ -137,10 +137,11 @@ test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
   // journey that has not demonstrated it can be green — or, for the two below that are RED on this
   // estate, that it goes red for a reason in the product rather than in itself.
   //
-  // "Driven" is not "green", and BJ-DEX-02 below is the case that makes the distinction do work: it
-  // was run, it reached its own skip on a defect in a published bundle, and it is recorded as
-  // exactly that. Three states are distinguished in this file and each has its own note — driven
-  // and green, driven and red for a product reason, and never driven at all (BJ-MED-01/02/03).
+  // "Driven" is not "green", and this file keeps the distinction visible: three states, each with
+  // its own note — driven and green, driven and red for a reason in the PRODUCT (BJ-FOR-01/06),
+  // and never driven at all (BJ-MED-01/02/03). BJ-DEX-02 spent a day in a fourth state that is not
+  // allowed to persist — implemented, driven, not yet green — and the note below is what replaced
+  // it the run it went green.
   //
   // ── BJ-FOR-01 AND BJ-FOR-06 ARE DECLARED AND FAILING, ON PURPOSE ──────────────────────────────
   // Both open a market at its own address, and on this estate that address is broken: the gateway
@@ -154,29 +155,44 @@ test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
     'BJ-ACC-01',
     'BJ-ACC-02',
     'BJ-ACC-03',
-    // ── BJ-DEX-01 WENT GREEN. BJ-DEX-02 WAS DRIVEN AND HAS NOT GONE GREEN YET. ──────────────
+    // ── BOTH WENT GREEN, AND BJ-DEX-02 IS THE PHASE-H GATE ITSELF ───────────────────────────
     //
     // Both were run in Chromium against the estate before they were added, and both assert against
-    // the chain rather than against the page they load. BJ-DEX-01 passed, against mainnet, through
-    // the estate's own gateway.
+    // the chain rather than against the page they load. BJ-DEX-01 passed against mainnet and then
+    // against testnet, through the estate's own gateway.
     //
-    // BJ-DEX-02 has so far reached only its own skip, and the reason is written down rather than
-    // smoothed over. The drive was aimed at testnet — mainnet is not available to it, because
-    // `deploy/scripts/hearth-fund.js` caps mainnet funding at zero by policy and a journey that
-    // signs needs a funded key — and the bundle the estate was serving carried a `DEPLOYMENTS`
-    // table that knew only chain 7411. So the testnet exchange had no deployment, `/pools` listed
-    // nothing, and the journey correctly refused to assert anything about a page with no pool on
-    // it. That was a defect in a PUBLISHED bundle rather than in this file: `micro-exchange-web`'s
-    // CI had gone red on the commit that added chain 7412 and no image was ever cut, so the estate
-    // ran the older one for four hours with nothing saying so. Fixed in 2026.08.57.
+    // BJ-DEX-02 IS the measurement `docs/ecosystem/39-forge-exchange.md` §6 asks for — "beacon
+    // drives a swap through the real gateway" — and on 2026-08-16 it went green in 46s: the swap
+    // page built the call, the injected provider signed it as
+    // 0x5383d15cea5805242e6e180d6f7c6ac481f6d193058a0cc898097bf37f031164, the testnet router at
+    // 0xba2b9db8… executed it, and the receipt came back `status 0x1` spending exactly the 0.001
+    // EMBER typed into "Amount to pay". Aimed at testnet because `deploy/scripts/hearth-fund.js`
+    // caps mainnet funding at zero by policy and a journey that signs needs a funded key.
     //
-    // This note is replaced by the measurement the first time the journey presses Swap and reads a
-    // receipt back. Until then it is the honest state: implemented, driven, not yet green.
+    // Three defects had to be cleared to get there, and each is worth the sentence:
     //
-    // BJ-DEX-02 additionally SIGNS: it presses
-    // Swap with an injected provider and asserts the transaction receipt, so on a deployment with
-    // no `BEACON_DEX_KEY` it SKIPS, loudly, naming the variable — it never falls back to checking
-    // that a page which cannot sign says it cannot sign.
+    //   * The estate was serving an `exchange-web` bundle whose `DEPLOYMENTS` table knew only
+    //     chain 7411, so testnet had no deployment and `/pools` listed nothing. That was a defect
+    //     in a PUBLISHED bundle rather than in this file — `micro-exchange-web`'s CI had gone red
+    //     on the commit that added chain 7412 and no image was ever cut, so the estate ran the
+    //     older one for four hours with nothing saying so. Fixed in 2026.08.57.
+    //   * The provider this journey injects was passed to `addInitScript` as a FUNCTION, which
+    //     Playwright serialises with `toString()` — and `tsx` had already rewritten it to call
+    //     `__name`, a helper that exists in this process and not in a page. The injection died on
+    //     a ReferenceError, `window.ethereum` was never assigned, and the swap page said, quite
+    //     correctly, that no wallet was installed. `PROVIDER_SOURCE` in `dexjourneys.ts` is the
+    //     fix and carries the full account.
+    //   * The last two defects were in this journey's own CLOCK, and both reported a swap the
+    //     chain had already executed as a failure: the tier's 120s journey deadline expired over
+    //     0xe52a2974… (block 18188), and then a 120s receipt poll gave up on 0x11a647bb… 83
+    //     seconds before it mined in block 18199. EMBER testnet's block intervals run to a mean
+    //     near 40s with a tail past two minutes, so the poll is now five minutes and the journey
+    //     carries a `deadlineMs` of seven. A monitor that calls a working product broken is worse
+    //     than no monitor, and it took two green swaps on chain to see it.
+    //
+    // BJ-DEX-02 is also the one journey here that SIGNS: on a deployment with no `BEACON_DEX_KEY`
+    // it SKIPS, loudly, naming the variable — it never falls back to checking that a page which
+    // cannot sign says it cannot sign.
     //
     // The injected provider is not interception and `smoke.test.ts`'s ban does not reach it: it
     // supplies an input the environment owed — a browser wallet, which is an extension this

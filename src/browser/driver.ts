@@ -94,8 +94,24 @@ export interface BrowserPage {
    *   * `exposeFunction` is the callback the other way: the injected provider has no private key
    *     and no signing code, it forwards each `request` to this process, which signs with
    *     `@cloudsforge/hearth-wallet-core` and broadcasts. The key is never in the page.
+   *
+   * ── AND WHY `addInitScript` TAKES A STRING HERE ──────────────────────────────────────────────
+   *
+   * Playwright serialises a FUNCTION argument with `Function.prototype.toString()` and evaluates
+   * that text in the page. This process runs TypeScript through `tsx`, which is esbuild, which
+   * has `keepNames` on: a function bound to a name is rewritten to `__name(fn, "name")` so stack
+   * traces survive minification. `__name` is a module-scope helper that exists in THIS process and
+   * nowhere in the page, so the serialised text throws `ReferenceError: __name is not defined`
+   * before its first statement — silently, because an init script that throws is reported as a
+   * page error and not as a failed call. The provider is then simply never installed, and the
+   * product correctly says no wallet is present.
+   *
+   * That is not hypothetical: it is the defect this signature was widened to fix. An inline arrow
+   * passed straight to `evaluate` is untouched (it is bound to no name), which is why every other
+   * evaluation in this file worked and only the one with `const request = …` inside it did not.
+   * A string is not transpiled by anything, so what is written is what the page runs.
    */
-  addInitScript(fn: (arg: never) => void, arg?: unknown): Promise<void>
+  addInitScript(script: string | ((arg: never) => void), arg?: unknown): Promise<void>
   exposeFunction(name: string, fn: (...args: never[]) => unknown): Promise<void>
 }
 

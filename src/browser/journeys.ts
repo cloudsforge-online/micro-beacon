@@ -148,6 +148,19 @@ export interface SurfaceJourneyOptions {
    * declared or the journey can never be green.
    */
   readonly expected?: readonly ExpectedFailure[]
+  /**
+   * Longer than the 120s below, for a scenario that waits on something other than a browser.
+   *
+   * Exactly one does. BJ-DEX-02 signs a transaction and then polls `eth_getTransactionReceipt`
+   * until the chain mines it, and EMBER's own block time is the thing it is waiting for — a wait
+   * that has nothing to do with how fast a page renders. Sharing the browser deadline made it
+   * report `journey exceeded 120000ms` on a run whose swap had already succeeded on chain, which
+   * is a red that names the monitor's clock and not the product.
+   *
+   * Kept as an opt-in rather than raising the default: 120s is right for every journey that only
+   * drives a page, and a deadline nothing enforces is not a deadline.
+   */
+  readonly deadlineMs?: number
   /** Anything this scenario asserts beyond "the application mounted". */
   readonly verify?: (
     ctx: JourneyContext,
@@ -187,7 +200,7 @@ export function surfaceJourney(options: SurfaceJourneyOptions): JourneyDefinitio
     // Generous, and its own rather than the global 90s: launching Chromium, loading a bundle and
     // waiting for a SPA to mount is not comparable to a JSON round trip, and sharing one deadline
     // would either make browser journeys flaky or make HTTP journeys slow to report.
-    deadlineMs: 120_000,
+    deadlineMs: options.deadlineMs ?? 120_000,
     async run(ctx) {
       const availability = await browserAvailable(options.config)
       if (!availability.ok) ctx.skip(availability.reason)
