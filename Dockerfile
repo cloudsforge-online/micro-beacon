@@ -1,12 +1,13 @@
 # syntax=docker/dockerfile:1.7
 #
-# Build context is this repository, plus two named contexts for the unpublished sibling packages:
+# Build context is this repository, plus three named contexts for the unpublished sibling packages:
 #
 #   docker build -t beacon \
 #     --build-context runtimepkgs=../runtime \
-#     --build-context contractspkgs=../contracts .
+#     --build-context contractspkgs=../contracts \
+#     --build-context walletcore=../hearth-wallet-core .
 #
-# Both extra contexts are temporary. Once the @cloudsforge/* packages are published (AD-02),
+# All three extra contexts are temporary. Once the @cloudsforge/* packages are published (AD-02),
 # package.json takes registry versions, the COPY lines marked below are deleted, the flags go
 # away, and this becomes an ordinary single-context build. Nothing else changes.
 #
@@ -37,6 +38,12 @@ COPY --from=runtimepkgs packages /runtime/packages
 # same note about the same two lines.
 COPY --from=contractspkgs package.json pnpm-workspace.yaml pnpm-lock.yaml /contracts/
 COPY --from=contractspkgs packages /contracts/packages
+# The signer, for BJ-DEX-02 and nothing else. Two lines rather than four because it has NO
+# DEPENDENCIES OF ITS OWN — no workspace file, no lockfile, and no install step below — which is
+# the whole reason a monitoring service can take a wallet core without taking a dependency tree.
+# `src` and not `dist`: its working-tree `main` is `src/index.ts`, and tsx runs it as it stands.
+COPY --from=walletcore package.json /hearth-wallet-core/
+COPY --from=walletcore src /hearth-wallet-core/src
 
 # Install the siblings' OWN dependencies first. `link:` uses the sibling as-is and
 # does not manage its dependency tree, so /runtime's node_modules must exist independently —
@@ -74,6 +81,7 @@ WORKDIR /app
 # or `'@cloudsforge/contracts-auth'` — fails at run time.
 COPY --from=build /runtime /runtime
 COPY --from=build /contracts /contracts
+COPY --from=build /hearth-wallet-core /hearth-wallet-core
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/tsconfig.json /app/tsconfig.base.json ./

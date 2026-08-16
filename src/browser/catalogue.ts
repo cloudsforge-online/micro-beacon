@@ -312,6 +312,7 @@ const L = 'L — the developer platform'
 const M = 'M — the operator console'
 const N = 'N — Forge Network: the site, the faucet, the explorer'
 const J = 'J — Forge Foresight, the player surface'
+const K = 'K — Forge Exchange'
 const Q = 'Q — community and governance'
 const R = 'R — cross-surface journeys'
 const S = 'S — the adversarial matrix'
@@ -438,6 +439,43 @@ export const T3_SCENARIOS: readonly Scenario[] = [
   scenario('BJ-FOR-13', J, 'The filter set offered is exactly the lifecycle states the service uses', 'presentation', ['foresight'], {}),
   scenario('BJ-FOR-14', J, 'Portfolio by address: every figure equals the contract’s own storage', 'presentation', ['foresight', 'chain'], { gate: true }),
   scenario('BJ-FOR-17', J, 'The refusal list renders with no account, and no request carries a credential', 'client-request', ['foresight'], { gate: true }),
+
+  /* ---- group K: Forge Exchange
+   *
+   * ══════════════════════════════════════════════════════════════════════════════════════════
+   * **TWO ROWS, AND THEY ARE NOT IN DOC 22 AT ALL.**
+   *
+   * Doc 22 enumerates 318 scenarios across the surfaces that existed when it was written, and
+   * Forge Exchange was not one of them — `docs/ecosystem/39-forge-exchange.md` is the plan, and
+   * its §6 phase H is what these two close. So unlike every other row in this file, these were
+   * not transcribed from a table; they were written against a product, and the numbering
+   * continues the estate's convention rather than citing a source line that does not exist.
+   *
+   * Saying that here matters because the rest of this catalogue's authority comes from being a
+   * faithful copy of a specification. These two have to earn it a different way, which is why
+   * both assert against the CHAIN rather than against a design intent:
+   *
+   *   * **BJ-DEX-01** is BJ-FOR-06's argument on a different product. The pool page renders
+   *     `reserve0 × reserve1` as an exact integer in smallest units — a number with no rounding
+   *     in it and no plausible way to be coincidentally correct — and the assertion is that the
+   *     number on screen equals the one `getReserves()` answers. A page that renders a cached,
+   *     stale or invented reserve fails; a page that renders nothing fails; a page that is right
+   *     passes. Nothing about it needs a key, an account or a signature.
+   *   * **BJ-DEX-02** is the one the phase gate names, and it is the only journey in this
+   *     repository that spends money. It presses the button a reader presses, with a wallet that
+   *     signs for real, against the deployed router, and then asserts the RECEIPT — not a toast,
+   *     not a state class, not the absence of an error. See `dexjourneys.ts` for why an injected
+   *     provider is not interception, and for what it refuses to do when no key is configured.
+   *
+   * Neither is `gate: true`. That is deliberate and it is not timidity: a gating journey refuses
+   * a release, and BJ-DEX-02 depends on a funded key that the estate does not currently supply
+   * on mainnet — so gating on it would make every release wait on a balance rather than on the
+   * product. It becomes a gate the day the key is a provisioned fixture like every other. Until
+   * then it runs, it reports, and a red is read by a person.
+   * ══════════════════════════════════════════════════════════════════════════════════════════
+   */
+  scenario('BJ-DEX-01', K, 'The pool page holds what the pair contract holds, to the smallest unit', 'presentation', ['exchange', 'chain'], {}),
+  scenario('BJ-DEX-02', K, 'A swap signed in the browser reaches the chain and the receipt says it succeeded', 'client-request', ['exchange', 'chain'], {}),
 
   /* ---- user-uploaded images
    *

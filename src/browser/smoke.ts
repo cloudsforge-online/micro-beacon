@@ -315,6 +315,30 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
     renders: [/Forge Trade/i, /Strategies/i],
   },
   {
+    key: 'exchange',
+    subdomain: 'exchange',
+    path: '/',
+    // No session, and unlike every other `does-not-have-to` on this list that is not a relaxation
+    // — `exchange-web` has no account to show. It authenticates nobody, stores nothing, and the
+    // only identity in the product is whatever key the reader's own wallet holds.
+    session: 'does-not-have-to',
+    //
+    // THE EDITORIAL HALF IS A SENTENCE THE PAGE CANNOT RENDER WITHOUT REACHING THE CHAIN.
+    //
+    // `Swap`'s lede is written per-deployment and only mounts once `ChainProvider` has an answer
+    // to `eth_chainId` and `deploymentFor()` has matched it. So this string is not decoration that
+    // ships in the bundle: getting it on screen means the browser reached `rpc.<apex>` ACROSS
+    // ORIGINS and got a chain id back. That is the one deploy fact this surface depends on and the
+    // one nothing else in the estate exercises — every other frontend talks to a CloudsForge API
+    // on its own origin, so `exchange.<apex>` is the only entry in `cf-cors`'s allowlist whose
+    // absence no other check here would notice. Lose the allowlist entry and this goes red.
+    //
+    // The structural half is the product name from the shell. Pinned second and deliberately weak:
+    // it would survive a chain outage, and it is here to catch a gateway serving one bundle from
+    // another hostname, which is what `renders` was built for.
+    renders: [/The price is not quoted by anybody/i, /Forge Exchange/i],
+  },
+  {
     key: 'worlds',
     subdomain: 'worlds',
     path: '/',

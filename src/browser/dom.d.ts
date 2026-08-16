@@ -28,6 +28,27 @@ interface HTMLAnchorElement {
   readonly href: string
 }
 
+/**
+ * The two members BJ-DEX-02 needs, and the reason `window` appears here at all.
+ *
+ * Forge Exchange cannot be signed in a browser with no wallet, and the Chromium beacon drives has
+ * no extensions. So `dexjourneys.ts` installs a provider before any of the page's own script runs —
+ * `exchange-web/src/lib/wallet.ts` reads `window.ethereum` and requires only that `request` be a
+ * function — and that provider forwards every call to a signer in the Node process through the
+ * binding `page.exposeFunction` installs. Neither member exists in this process; both are declared
+ * for the closures that are serialised into the browser, exactly as `document` is above.
+ *
+ * `ethereum` is `unknown` rather than a provider interface on purpose: the shape is the PRODUCT's
+ * to define, `wallet.ts` narrows it there, and a second definition here would be the copy that
+ * drifts. `beaconWalletRequest` takes and returns JSON strings so that the process boundary carries
+ * no types across it — a `bigint` or an `Error` crossing a serialiser silently is how a signer ends
+ * up broadcasting something other than what it was asked to sign.
+ */
+declare const window: {
+  ethereum?: unknown
+  beaconWalletRequest(method: string, params: string): Promise<string>
+}
+
 /** BJ-ACC-02 reads the values three inputs kept after a refusal. */
 interface HTMLInputElement {
   readonly value: string

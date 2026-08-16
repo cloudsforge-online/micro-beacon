@@ -137,6 +137,11 @@ test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
   // journey that has not demonstrated it can be green — or, for the two below that are RED on this
   // estate, that it goes red for a reason in the product rather than in itself.
   //
+  // "Driven" is not "green", and BJ-DEX-02 below is the case that makes the distinction do work: it
+  // was run, it reached its own skip on a defect in a published bundle, and it is recorded as
+  // exactly that. Three states are distinguished in this file and each has its own note — driven
+  // and green, driven and red for a product reason, and never driven at all (BJ-MED-01/02/03).
+  //
   // ── BJ-FOR-01 AND BJ-FOR-06 ARE DECLARED AND FAILING, ON PURPOSE ──────────────────────────────
   // Both open a market at its own address, and on this estate that address is broken: the gateway
   // splits `foresight.<apex>/markets/:id` between the bundle and the API on `Accept:
@@ -149,6 +154,36 @@ test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
     'BJ-ACC-01',
     'BJ-ACC-02',
     'BJ-ACC-03',
+    // ── BJ-DEX-01 WENT GREEN. BJ-DEX-02 WAS DRIVEN AND HAS NOT GONE GREEN YET. ──────────────
+    //
+    // Both were run in Chromium against the estate before they were added, and both assert against
+    // the chain rather than against the page they load. BJ-DEX-01 passed, against mainnet, through
+    // the estate's own gateway.
+    //
+    // BJ-DEX-02 has so far reached only its own skip, and the reason is written down rather than
+    // smoothed over. The drive was aimed at testnet — mainnet is not available to it, because
+    // `deploy/scripts/hearth-fund.js` caps mainnet funding at zero by policy and a journey that
+    // signs needs a funded key — and the bundle the estate was serving carried a `DEPLOYMENTS`
+    // table that knew only chain 7411. So the testnet exchange had no deployment, `/pools` listed
+    // nothing, and the journey correctly refused to assert anything about a page with no pool on
+    // it. That was a defect in a PUBLISHED bundle rather than in this file: `micro-exchange-web`'s
+    // CI had gone red on the commit that added chain 7412 and no image was ever cut, so the estate
+    // ran the older one for four hours with nothing saying so. Fixed in 2026.08.57.
+    //
+    // This note is replaced by the measurement the first time the journey presses Swap and reads a
+    // receipt back. Until then it is the honest state: implemented, driven, not yet green.
+    //
+    // BJ-DEX-02 additionally SIGNS: it presses
+    // Swap with an injected provider and asserts the transaction receipt, so on a deployment with
+    // no `BEACON_DEX_KEY` it SKIPS, loudly, naming the variable — it never falls back to checking
+    // that a page which cannot sign says it cannot sign.
+    //
+    // The injected provider is not interception and `smoke.test.ts`'s ban does not reach it: it
+    // supplies an input the environment owed — a browser wallet, which is an extension this
+    // Chromium has none of — and every request the page makes as a result still goes to the real
+    // gateway and the real node. `dexjourneys.ts`'s header argues this at length.
+    'BJ-DEX-01',
+    'BJ-DEX-02',
     'BJ-DSH-01',
     'BJ-DSH-17',
     'BJ-FOR-01',

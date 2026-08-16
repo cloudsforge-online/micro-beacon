@@ -35,13 +35,21 @@
     "",
     "tsx is a runtime dependency because the unpublished packages resolve to their TypeScript",
     "sources. On publish their publishConfig points at dist/, tsx moves to devDependencies, and the",
-    "image runs 'node dist/index.js'."
+    "image runs 'node dist/index.js'.",
+    "",
+    "hearth-wallet-core is the odd one out: it is not a runtime package and not a contract, it is",
+    "the SIGNER, and beacon takes it for exactly one journey. BJ-DEX-02 has to sign a swap in a",
+    "browser that has no wallet extension, and 25-wallet-clients.md section 3 names divergent copies",
+    "of a signer as the worst failure that design can have. Writing secp256k1 and legacy RLP here to",
+    "save a dependency would be the fourth divergence. It has no dependencies of its own, so unlike",
+    "runtime and contracts it needs no install step of its own in the image."
   ],
   "dependencies": {
     "@cloudsforge/auth": "link:../runtime/packages/auth",
     "@cloudsforge/contracts-auth": "link:../contracts/packages/auth",
     "@cloudsforge/contracts-money": "link:../contracts/packages/money",
     "@cloudsforge/db": "link:../runtime/packages/db",
+    "@cloudsforge/hearth-wallet-core": "link:../hearth-wallet-core",
     "@cloudsforge/http": "link:../runtime/packages/http",
     "@cloudsforge/jobs": "link:../runtime/packages/jobs",
     "@cloudsforge/lifecycle": "link:../runtime/packages/lifecycle",

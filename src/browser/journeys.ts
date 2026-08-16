@@ -80,10 +80,11 @@ import { FORESIGHT_IMPLEMENTATIONS } from './foresightjourneys.ts'
 import { WALLET_IMPLEMENTATIONS } from './walletjourneys.ts'
 import { DASHBOARD_IMPLEMENTATIONS } from './dashboardjourneys.ts'
 import { MEDIA_IMPLEMENTATIONS } from './mediajourneys.ts'
+import { DEX_IMPLEMENTATIONS } from './dexjourneys.ts'
 import { syntheticPassword, type Operator } from './fixtures.ts'
 
 /**
- * The fifteen surface keys, and nothing else about them.
+ * The sixteen surface keys, and nothing else about them.
  *
  * Keys only — no hostname, no port, no apex rule. Beacon needs to know that `hub` names a bundle
  * and `hub-api` names a service so that a missing bundle can say "no address for the hub surface"
@@ -109,6 +110,13 @@ export const SURFACE_KEYS: readonly string[] = [
   'aetherholm',
   'site',
   'network',
+  // Forge Exchange. A key like any other and resolved like any other — but the one on this list
+  // that names NO service, which is why it is worth a line. Every other bundle here has an API
+  // behind it; `exchange` is a static bundle whose only backend is a JSON-RPC node and a pair of
+  // contracts on Hearth. `deploy/scripts/surface-routes.py` records the same fact from the other
+  // side with its `# REMOVED: cf-api-exchange` line. A journey on this surface therefore declares
+  // `chain` in its `needs` and nothing else, and that is not an omission.
+  'exchange',
   // Not one of the fifteen bundles: `account` is the sign-in surface doc 22 §8.1 records as not
   // existing anywhere in the estate. It is named here so a scenario can declare that it needs one,
   // and so the absence is a resolvable name rather than a silence.
@@ -613,6 +621,11 @@ const IMPLEMENTATIONS: Readonly<Record<string, Implementation>> = {
   // its own apparatus — a byte-built PNG fixture and two in-page evaluations — and folding it in
   // would bury the registry it is joining.
   ...MEDIA_IMPLEMENTATIONS,
+  // Forge Exchange. Its own file for a third reason, distinct from both above: it is the only one
+  // that SIGNS. It carries a private key, an EIP-1193 provider it installs into the page, and the
+  // five JSON-RPC methods a broadcaster needs, none of which any other journey should be able to
+  // reach by accident.
+  ...DEX_IMPLEMENTATIONS,
 }
 
 /* ------------------------------------------------------------------ the declaration */

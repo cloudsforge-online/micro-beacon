@@ -486,7 +486,26 @@ export interface ChainAccess {
   readonly signal?: AbortSignal
 }
 
-async function rpc(access: ChainAccess, method: string, params: readonly unknown[]): Promise<unknown> {
+/**
+ * One JSON-RPC call against the chain.
+ *
+ * EXPORTED, having been private for the life of this file, and the reason is worth a sentence
+ * because "make it public" is usually the wrong answer. Everything above this line is a READ:
+ * `eth_call` and `eth_chainId` against a node, wrapped so that a journey names the thing it wants
+ * (`poolOf`, `stakeOf`) rather than an RPC method. `dexjourneys.ts` needs `eth_getTransactionCount`,
+ * `eth_gasPrice`, `eth_estimateGas`, `eth_sendRawTransaction` and `eth_getTransactionReceipt` — the
+ * five a signer needs and no reader does — and wrapping each of those in a named helper here would
+ * put a transaction-sending vocabulary into the module whose entire subject is reading.
+ *
+ * So the transport is shared and the vocabulary is not: the error shape, the `signal` threading and
+ * the `body.error` check are the parts that must not be reimplemented per caller, and they are
+ * exactly the parts this exports.
+ */
+export async function chainRpc(
+  access: ChainAccess,
+  method: string,
+  params: readonly unknown[],
+): Promise<unknown> {
   const response = await fetch(access.rpc, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -501,13 +520,13 @@ async function rpc(access: ChainAccess, method: string, params: readonly unknown
 
 /** The chain id the node reports. Decimal. */
 export async function chainId(access: ChainAccess): Promise<bigint | null> {
-  const result = await rpc(access, 'eth_chainId', [])
+  const result = await chainRpc(access, 'eth_chainId', [])
   return typeof result === 'string' && result.startsWith('0x') ? BigInt(result) : null
 }
 
 /** One `eth_call` at the latest block. */
 export async function ethCall(access: ChainAccess, to: string, data: string): Promise<unknown> {
-  return await rpc(access, 'eth_call', [{ to, data }, 'latest'])
+  return await chainRpc(access, 'eth_call', [{ to, data }, 'latest'])
 }
 
 /** `pool(outcome)` — the wei staked on one side, straight out of contract storage. */
@@ -581,7 +600,7 @@ export async function stakersOf(
   access: ChainAccess,
   contract: string,
 ): Promise<readonly string[]> {
-  const logs = (await rpc(access, 'eth_getLogs', [
+  const logs = (await chainRpc(access, 'eth_getLogs', [
     {
       address: contract,
       fromBlock: '0x0',

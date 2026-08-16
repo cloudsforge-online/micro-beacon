@@ -21,6 +21,13 @@ export const GROUPS = {
   // entry — so it satisfies the rule above. A `foresight` group is what a customer can be told
   // about; the service behind it is still never published.
   foresight: 'Foresight',
+  // The seventh, on the same test as the sixth and passing it for the same reason: `exchange` is a
+  // registry row in `ui/packages/ui/src/surfaces.ts`, a switcher entry, and the name on the tile a
+  // customer presses. What is NOT published, here as everywhere, is what sits behind it — and
+  // behind this one there is no service at all. Forge Exchange is a static bundle and a pair of
+  // contracts on Hearth; `deploy/scripts/surface-routes.py` carries a `# REMOVED: cf-api-exchange`
+  // line saying exactly that. A group whose service set is empty is still a product.
+  exchange: 'Exchange',
 } as const
 
 export type ProductGroup = (typeof GROUPS)[keyof typeof GROUPS]

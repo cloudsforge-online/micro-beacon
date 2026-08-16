@@ -74,6 +74,29 @@ export interface BrowserPage {
   click(selector: string, options?: { timeout?: number }): Promise<void>
   waitForURL(predicate: (url: URL) => boolean, options?: { timeout?: number }): Promise<void>
   waitForTimeout(ms: number): Promise<void>
+  /**
+   * The two a journey that has to BE a wallet needs — and the reason they are not interception.
+   *
+   * `smoke.test.ts` bans `.route(`, `.fulfill(`, `.abort(` and `setOfflineMode` by regex, and the
+   * ban is right: every one of those answers a request the estate was supposed to answer, so a
+   * suite using them cannot see that the estate is down. These two do the opposite. They add an
+   * object to the page — `window.ethereum`, which no estate service was ever going to supply,
+   * because a browser wallet is a browser EXTENSION and this Chromium has none — and every request
+   * the page makes as a result still goes to the real gateway, the real RPC and the real chain.
+   *
+   * The distinction that matters: interception replaces an answer the product owed. Injection
+   * supplies an input the product's environment owed. A swap journey that stubbed the RPC would
+   * prove nothing; a swap journey with no wallet cannot press the button at all.
+   *
+   *   * `addInitScript` runs before any of the page's own script, which is what a real extension
+   *     does — a provider installed after React has read `window.ethereum` once is a provider the
+   *     app never sees.
+   *   * `exposeFunction` is the callback the other way: the injected provider has no private key
+   *     and no signing code, it forwards each `request` to this process, which signs with
+   *     `@cloudsforge/hearth-wallet-core` and broadcasts. The key is never in the page.
+   */
+  addInitScript(fn: (arg: never) => void, arg?: unknown): Promise<void>
+  exposeFunction(name: string, fn: (...args: never[]) => unknown): Promise<void>
 }
 
 interface Chromium {

@@ -601,8 +601,8 @@ test('the browser telemetry sink is partitioned, so a broken reporter is not a b
 
 /* ------------------------------------------------------------------ the manifest */
 
-test('the manifest covers the sixteen surfaces the estate serves, each exactly once', () => {
-  assert.equal(SMOKE_SURFACES.length, 16)
+test('the manifest covers the seventeen surfaces the estate serves, each exactly once', () => {
+  assert.equal(SMOKE_SURFACES.length, 17)
   const keys = SMOKE_SURFACES.map((s) => s.key)
   assert.equal(new Set(keys).size, keys.length, 'a surface is listed twice')
 

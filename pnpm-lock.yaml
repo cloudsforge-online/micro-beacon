@@ -20,6 +20,9 @@ importers:
       '@cloudsforge/db':
         specifier: link:../runtime/packages/db
         version: link:../runtime/packages/db
+      '@cloudsforge/hearth-wallet-core':
+        specifier: link:../hearth-wallet-core
+        version: link:../hearth-wallet-core
       '@cloudsforge/http':
         specifier: link:../runtime/packages/http
         version: link:../runtime/packages/http
