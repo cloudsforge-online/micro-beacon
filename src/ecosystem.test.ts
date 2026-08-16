@@ -640,6 +640,93 @@ test('ecosystem.one-account goes red when activity serves its feed without a tok
   })
 })
 
+/* ------------------------------------- identity in another estate (micro-org#474) */
+
+/**
+ * The three journeys that need identity's events to reach THIS estate's activity.
+ *
+ * Under the combined view testnet signs in at the mainnet identity, whose `event_subscriptions`
+ * hold bare service names that resolve only inside mainnet's compose network. Nothing identity
+ * commits can arrive at testnet's activity, and activity has never had another producer — so the
+ * property these assert is not failing there, it is unanswerable. They must skip, and a skip is
+ * not green (`journeys.ts` rule 2), which is what keeps this from being a mute.
+ */
+async function withForeignIdentity(body: () => Promise<void>): Promise<void> {
+  process.env['BEACON_IDENTITY_FOREIGN'] = 'true'
+  try {
+    await body()
+  } finally {
+    delete process.env['BEACON_IDENTITY_FOREIGN']
+  }
+}
+
+for (const definition of [ECOSYSTEM_EVENT_BUS, ECOSYSTEM_ONE_ACTIVITY, ECOSYSTEM_ONE_ACCOUNT]) {
+  test(`${definition.name} skips rather than fails when identity is another estate's`, async () => {
+    await withEstate(async (estate) => {
+      await withForeignIdentity(async () => {
+        const result = await run(definition, estate)
+        assert.equal(result.status, 'skip', `expected a skip, got ${result.status}: ${String(result.error)}`)
+        assert.match(String(result.error), /micro-org#474/)
+      })
+    })
+  })
+
+  test(`${definition.name} does not skip on an estate that owns its identity`, async () => {
+    // The variable absent is mainnet, and the estate here is healthy — so the guard must be
+    // invisible. A guard that skipped by default would take three journeys off the only estate
+    // where they can run, and it would do it silently.
+    await withEstate(async (estate) => {
+      assert.equal((await run(definition, estate)).status, 'pass')
+    })
+  })
+}
+
+test('the guard is off unless compose says otherwise, empty string included', async () => {
+  // `${CF_IDENTITY_URL:+true}` in compose expands to the EMPTY STRING on mainnet, and docker
+  // passes that through as a set-but-empty variable rather than an absent one. Reading it as
+  // truthy would skip these three journeys on the estate that owns its identity.
+  await withEstate(async (estate) => {
+    process.env['BEACON_IDENTITY_FOREIGN'] = ''
+    try {
+      assert.equal((await run(ECOSYSTEM_EVENT_BUS, estate)).status, 'pass')
+    } finally {
+      delete process.env['BEACON_IDENTITY_FOREIGN']
+    }
+  })
+})
+
+test('ecosystem.one-account still proves what it can before it skips', async () => {
+  // The guard sits after three steps that hold on every estate, so a skip here is not a journey
+  // that did nothing — losing the identity/hub agreement check on testnet is the cost this
+  // ordering exists to avoid, and it is the check that caught micro-org#472's hub-api half.
+  await withEstate(async (estate) => {
+    await withForeignIdentity(async () => {
+      const result = await run(ECOSYSTEM_ONE_ACCOUNT, estate)
+      assert.equal(result.status, 'skip')
+      const ran = result.steps.filter((step) => step.status === 'pass').map((step) => step.name)
+      assert.ok(ran.includes('identity recognises the token as that account'), ran.join(', '))
+      assert.ok(ran.includes('hub resolves the same subject from the same token'), ran.join(', '))
+      assert.ok(ran.includes('an unauthenticated read of each is refused'), ran.join(', '))
+    })
+  })
+})
+
+test('the other two skip before they spend anything', async () => {
+  // Guarded at the top, so no sign-in, no pool slot, no request. Asserted because the difference
+  // between these and one-account is deliberate and a later edit could quietly level it.
+  await withEstate(async (estate) => {
+    await withForeignIdentity(async () => {
+      for (const definition of [ECOSYSTEM_EVENT_BUS, ECOSYSTEM_ONE_ACTIVITY]) {
+        const before = estate.requests.length
+        const result = await run(definition, estate)
+        assert.equal(result.status, 'skip')
+        assert.equal(result.steps.length, 0, `${definition.name} ran a step before skipping`)
+        assert.equal(estate.requests.length, before, `${definition.name} called the estate before skipping`)
+      }
+    })
+  })
+})
+
 /* ------------------------------------------------------------------ ecosystem.trial-balance */
 
 test('ecosystem.trial-balance passes over a journal with entries in it', async () => {
