@@ -596,29 +596,98 @@ export async function contractStatus(
  */
 export const STAKED_EVENT = 'Staked(address,uint8,uint256,uint256,uint256)'
 
+/**
+ * The widest block window this chain will answer a log query for, less a margin.
+ *
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * **`fromBlock: '0x0', toBlock: 'latest'` IS NOT A QUERY THIS NODE ANSWERS, AND IT NEVER WAS.**
+ *
+ * `hearth/node/src/jsonrpc/methods.js` sets `maxLogRange: 10_000` and refuses anything wider with
+ * `invalidParams` — `filter: range exceeds 10000 blocks`. The comment beside it says why in one
+ * line: "A wallet asks for a handful; an indexer that asks for a million is a denial of service,
+ * not a user." The node is right, and this file was the indexer.
+ *
+ * It went unnoticed because it was TRUE for a while: the query is only refused once the chain is
+ * more than 10,000 blocks long, so this worked from genesis until the chain grew past it and then
+ * failed for ever after. On 2026-08-16 mainnet stood at block 40,559 and `BJ-FOR-14` errored in
+ * 2.1s — before its own first assertion — so the estate's Foresight monitor reported a product
+ * defect about a limit inside the monitor.
+ *
+ * 9,000 rather than 10,000 because the cap counts INCLUSIVELY (`toBlock - fromBlock + 1 >
+ * maxLogRange`). A fence-post error here would fail exactly like a broken node, on exactly the
+ * queries a short chain never reaches, which is the shape of bug this one already was.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+const LOG_WINDOW = 9_000n
+
+/** The chain's own height. `null` when the node answered with something that is not a quantity. */
+export async function blockHeight(access: ChainAccess): Promise<bigint | null> {
+  const result = await chainRpc(access, 'eth_blockNumber', [])
+  return typeof result === 'string' && result.startsWith('0x') ? BigInt(result) : null
+}
+
+/**
+ * Every address that has staked on ANY of these contracts, by contract, from genesis to the tip.
+ *
+ * ONE SWEEP FOR ALL OF THEM, and that is the point of the plural. The window above means a scan
+ * costs `ceil(height / 9000)` round trips, so asking per-contract across the 32 markets this
+ * estate serves would be 32 times the round trips for the same logs. `eth_getLogs` takes an ARRAY
+ * of addresses (`parseAddresses`, same file as the cap) and counts them against
+ * `maxFilterCriteria: 1_000` — 32 addresses and one topic is 33, three orders of magnitude clear.
+ *
+ * Results are grouped by `log.address` rather than trusted to arrive filtered, because a node that
+ * ignored the address filter would otherwise hand every market's stakers to the first market.
+ */
+export async function stakersByContract(
+  access: ChainAccess,
+  contracts: readonly string[],
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const out = new Map<string, string[]>()
+  const wanted = contracts.filter((c) => ADDRESS.test(c)).map((c) => c.toLowerCase())
+  if (wanted.length === 0) return out
+  const head = await blockHeight(access)
+  if (head === null) {
+    throw new MoneyError(
+      'eth_blockNumber answered no height, so a log range cannot be bounded — and an unbounded ' +
+        'one is refused by this node',
+    )
+  }
+  for (let from = 0n; from <= head; from += LOG_WINDOW) {
+    const last = from + LOG_WINDOW - 1n
+    const to = last > head ? head : last
+    const logs = (await chainRpc(access, 'eth_getLogs', [
+      {
+        address: wanted,
+        fromBlock: `0x${from.toString(16)}`,
+        toBlock: `0x${to.toString(16)}`,
+        topics: [selectorTopic(STAKED_EVENT)],
+      },
+    ])) as readonly { address?: unknown; topics?: readonly string[] }[] | null
+    if (!Array.isArray(logs)) continue
+    for (const log of logs) {
+      const contract = typeof log.address === 'string' ? log.address.toLowerCase() : null
+      if (contract === null || !wanted.includes(contract)) continue
+      const staker = log.topics?.[1]
+      // A 32-byte topic holding a left-padded 20-byte address. Anything else is not one, and
+      // guessing at a malformed topic is how a journey ends up asserting about `0x000…0`.
+      if (typeof staker !== 'string' || staker.length !== 66) continue
+      const address = `0x${staker.slice(26)}`
+      if (!ADDRESS.test(address)) continue
+      const found = out.get(contract) ?? []
+      if (!found.includes(address)) found.push(address)
+      out.set(contract, found)
+    }
+  }
+  return out
+}
+
+/** The addresses that have staked on ONE market. `stakersByContract` for a single contract. */
 export async function stakersOf(
   access: ChainAccess,
   contract: string,
 ): Promise<readonly string[]> {
-  const logs = (await chainRpc(access, 'eth_getLogs', [
-    {
-      address: contract,
-      fromBlock: '0x0',
-      toBlock: 'latest',
-      topics: [selectorTopic(STAKED_EVENT)],
-    },
-  ])) as readonly { topics?: readonly string[] }[] | null
-  if (!Array.isArray(logs)) return []
-  const out: string[] = []
-  for (const log of logs) {
-    const staker = log.topics?.[1]
-    // A 32-byte topic holding a left-padded 20-byte address. Anything else is not one, and
-    // guessing at a malformed topic is how a journey ends up asserting about `0x000…0`.
-    if (typeof staker !== 'string' || staker.length !== 66) continue
-    const address = `0x${staker.slice(26)}`
-    if (ADDRESS.test(address) && !out.includes(address)) out.push(address)
-  }
-  return out
+  const byContract = await stakersByContract(access, [contract])
+  return byContract.get(contract.toLowerCase()) ?? []
 }
 
 /** The full 32-byte keccak of an event signature — topic 0, not a four-byte selector. */

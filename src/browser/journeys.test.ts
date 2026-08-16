@@ -134,23 +134,37 @@ test('the unimplemented gap is stated rather than silent', () => {
 test('EVERY IMPLEMENTED SCENARIO IS ONE THAT WAS DRIVEN', () => {
   // Every one of these was run in Chromium against the estate before it was added. A scenario in
   // this list that has never been driven is the thing the whole file argues against: a declared
-  // journey that has not demonstrated it can be green — or, for the two below that are RED on this
-  // estate, that it goes red for a reason in the product rather than in itself.
+  // journey that has not demonstrated it can be green.
   //
   // "Driven" is not "green", and this file keeps the distinction visible: three states, each with
-  // its own note — driven and green, driven and red for a reason in the PRODUCT (BJ-FOR-01/06),
-  // and never driven at all (BJ-MED-01/02/03). BJ-DEX-02 spent a day in a fourth state that is not
-  // allowed to persist — implemented, driven, not yet green — and the note below is what replaced
-  // it the run it went green.
+  // its own note — driven and green, driven and SKIPPING for a stated reason in the estate's data
+  // (BJ-FOR-06/14), and never driven at all (BJ-MED-01/02/03). BJ-DEX-02 spent a day in a fourth
+  // state that is not allowed to persist — implemented, driven, not yet green — and the note below
+  // is what replaced it the run it went green.
   //
-  // ── BJ-FOR-01 AND BJ-FOR-06 ARE DECLARED AND FAILING, ON PURPOSE ──────────────────────────────
-  // Both open a market at its own address, and on this estate that address is broken: the gateway
-  // splits `foresight.<apex>/markets/:id` between the bundle and the API on `Accept:
-  // application/json`, and the HTML carries no `Vary: Accept`, so the browser's HTTP cache answers
-  // the bundle's own JSON fetch with the page it just navigated to. Isolated in Chromium — see the
-  // header of `marketPageOrder`. Beacon's rule 1 is that an assertion failure means the PRODUCT is
-  // broken; it is, and withdrawing the journey until somebody fixes it is how a gap becomes
-  // invisible.
+  // ── BJ-FOR-01 WAS RED FOR A REAL DEFECT, AND THE DEFECT IS FIXED ──────────────────────────────
+  // It opens a market at its own address, and for a while that address was broken: the gateway
+  // split `foresight.<apex>/markets/:id` between the bundle and the API on `Accept:
+  // application/json`, and the HTML carried no `Vary: Accept`, so the browser's HTTP cache answered
+  // the bundle's own JSON fetch with the page it had just navigated to. Isolated in Chromium — see
+  // the header of `marketPageOrder`. Beacon's rule 1 is that an assertion failure means the PRODUCT
+  // is broken; it was, keeping the journey red is what got it fixed, and as of 2026-08-16 the
+  // document navigation answers `vary: Accept,Origin` with `cache-control: no-store` and the
+  // journey is green.
+  //
+  // Two things that were NOT that defect cost a day between the fix and the green run, and both are
+  // recorded here because both will recur: the journey's own `page.evaluate` closure named an inner
+  // arrow function, so `tsx` rewrote it to call `__name` and it died in the page exactly like
+  // BJ-DEX-02's injection did; and it searched `document.body`, which on every surface includes the
+  // estate masthead — "Mine for the CloudsForge **pool** in your browser" — so a journey asserting
+  // that the pool band comes last was measuring the header. It scopes to `<main>` now.
+  //
+  // ── BJ-FOR-06 AND BJ-FOR-14 SKIP, AND THE SKIP IS THE HONEST ANSWER ───────────────────────────
+  // Both need a market with money in the CONTRACT, and on mainnet no such market exists yet: all 32
+  // are deployed and every one holds a zero pool, because the only stakes taken so far are
+  // custodial and a custodial stake never enters the contract by design (see `custodialSettleHandler`
+  // in foresight). A skip that names the count is the truthful report of a cold start. Both go green
+  // on their own the first time anybody stakes from a wallet — nothing here has to change.
   assert.deepEqual([...IMPLEMENTED_IDS].sort(), [
     'BJ-ACC-01',
     'BJ-ACC-02',
