@@ -96,7 +96,7 @@ function healthy(overrides: Partial<PageObservation> = {}): PageObservation {
     // of the empty state. An imageless page is the honest default across most of the estate.
     images: [],
     // Market declares no `imagery`: its pictures are user-uploaded listing photographs, which no
-    // fixed path can name. Thirteen of the eighteen surfaces are in the same position.
+    // fixed path can name. Fourteen of the nineteen surfaces are in the same position.
     requiredImages: [],
     collected: newSink(),
     ...overrides,
@@ -525,7 +525,7 @@ test('a status page that reached a verdict is green, and an OUTAGE is a verdict'
 })
 
 test('only the status surface is asked to reach a verdict', () => {
-  // `concludes` is opt-in, and fifteen of the sixteen surfaces do not carry it. Asserted so that
+  // `concludes` is opt-in, and eighteen of the nineteen surfaces do not carry it. Asserted so that
   // adding it to a surface whose job is not to conclude anything is a deliberate act rather than
   // something that arrives by copying a neighbour.
   assert.deepEqual(
@@ -601,8 +601,8 @@ test('the browser telemetry sink is partitioned, so a broken reporter is not a b
 
 /* ------------------------------------------------------------------ the manifest */
 
-test('the manifest covers the eighteen surfaces the estate serves, each exactly once', () => {
-  assert.equal(SMOKE_SURFACES.length, 18)
+test('the manifest covers the nineteen surfaces the estate serves, each exactly once', () => {
+  assert.equal(SMOKE_SURFACES.length, 19)
   const keys = SMOKE_SURFACES.map((s) => s.key)
   assert.equal(new Set(keys).size, keys.length, 'a surface is listed twice')
 

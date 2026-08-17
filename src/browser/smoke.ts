@@ -249,7 +249,7 @@ export interface ContractualEmpty {
 }
 
 /**
- * The sixteen surfaces `deploy/compose/docker-compose.estate.yml` serves, in switcher order.
+ * The nineteen surfaces `deploy/compose/docker-compose.estate.yml` serves, in switcher order.
  *
  * Keys and subdomains are read off `ui/packages/ui/src/surfaces.ts`, which is the registry whose
  * own header records that this list was maintained by hand in eight places and had already
@@ -409,6 +409,41 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
           'before it loads anything else, and they come from a different COPY than the heroes.',
       },
     ],
+  },
+  {
+    key: 'agora',
+    subdomain: 'agora',
+    path: '/',
+    // The Square is a TIMELINE and not a sign-up wall, deliberately (`agora-web/src/pages/square.tsx`
+    // opens with the argument): a stranger arriving from a linked post sees what people are saying
+    // before they are asked for anything. `latest` sends the bearer when there is one and answers
+    // the same page without it, so a session that survived changes what is IN the list rather than
+    // whether the page renders — which is exactly the surface this assertion must not be made on.
+    session: 'does-not-have-to',
+    //
+    // BOTH HALVES ARE THE PAGE HEAD, AND THE HEAD IS THE PART THAT DOES NOT DEPEND ON THE API.
+    //
+    // `Timeline` renders its `header` prop above the body in every state — loading, failed, empty
+    // and ok alike (`agora-web/src/components/timeline.tsx`, `{header}` then `{body}`) — so these
+    // two strings say "this hostname served the Agora bundle and it mounted", and say NOTHING
+    // about whether the square loaded. That separation is the one this tier wants: a square that
+    // did not load is already red through `state--failed`, and a square that is legitimately empty
+    // on a fresh testnet is already green there. Pinning a post, a handle or a count here would
+    // make this entry a data assertion and put it in the way of both.
+    //
+    // The editorial half is the standfirst under the h1. The structural half is the h1 itself,
+    // which is also the left rail's first nav label — weaker on purpose, and here to catch the
+    // gateway serving one bundle from another hostname.
+    //
+    // NOT `/Forge Agora/i`, which is what the other entries reach for and would be WRONG here.
+    // The registry name reaches this page's DOM through `CloudsForgeFooter`, and that footer lists
+    // every `servesUi` surface on EVERY surface that mounts it — so the pattern would match on
+    // hub, on site and on market, which is the precise failure `renders` exists to detect. The
+    // Journal's `/Forge Journal/i` is safe for the opposite reason: that string is its own
+    // masthead, printed by `journal-web/src/lib/meta.ts`. Agora's masthead is the product switcher,
+    // and the switcher reads `Products` here — `inSwitcher: false` means `ProductSwitcher` finds no
+    // active entry and falls back to the generic label.
+    renders: [/Everything posted in the open/i, /The Square/i],
   },
   {
     key: 'admin',
