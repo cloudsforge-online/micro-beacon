@@ -96,7 +96,7 @@ function healthy(overrides: Partial<PageObservation> = {}): PageObservation {
     // of the empty state. An imageless page is the honest default across most of the estate.
     images: [],
     // Market declares no `imagery`: its pictures are user-uploaded listing photographs, which no
-    // fixed path can name. Thirteen of the seventeen surfaces are in the same position.
+    // fixed path can name. Thirteen of the eighteen surfaces are in the same position.
     requiredImages: [],
     collected: newSink(),
     ...overrides,
@@ -601,8 +601,8 @@ test('the browser telemetry sink is partitioned, so a broken reporter is not a b
 
 /* ------------------------------------------------------------------ the manifest */
 
-test('the manifest covers the seventeen surfaces the estate serves, each exactly once', () => {
-  assert.equal(SMOKE_SURFACES.length, 17)
+test('the manifest covers the eighteen surfaces the estate serves, each exactly once', () => {
+  assert.equal(SMOKE_SURFACES.length, 18)
   const keys = SMOKE_SURFACES.map((s) => s.key)
   assert.equal(new Set(keys).size, keys.length, 'a surface is listed twice')
 
@@ -644,8 +644,8 @@ test('an environment is a SUFFIX on the subdomain, and stands alone on the apex 
 
 test('every hostname the run pins is the environment it is about to visit', () => {
   // The failure this pins: `cli.ts` composed the pin list itself with a second copy of the
-  // `<sub>.<apex>` rule. Left alone, a `--env testnet` run would have pinned sixteen MAINNET
-  // certificates and then visited sixteen testnet pages — every certificate rejected, on an
+  // `<sub>.<apex>` rule. Left alone, a `--env testnet` run would have pinned seventeen MAINNET
+  // certificates and then visited seventeen testnet pages — every certificate rejected, on an
   // estate that was healthy.
   const hosts = smokeHosts('example.test', 'testnet')
   const visited = SMOKE_SURFACES.map((s) => new URL(surfaceUrl('example.test', s, 'testnet')).host)

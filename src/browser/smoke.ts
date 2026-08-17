@@ -367,6 +367,50 @@ export const SMOKE_SURFACES: readonly SmokeSurface[] = [
     renders: [/Developer Platform/i, /Organisations/i],
   },
   {
+    key: 'journal',
+    subdomain: 'journal',
+    path: '/',
+    // Nothing here is behind a sign-in and nothing ever will be: the archive is prose, and an
+    // article a reader has to have an account to finish is not published writing. `journal-web`
+    // still mounts the shared account bar, so a session that HAS survived shows in it — this
+    // entry just does not make that the test, because the page is correct either way.
+    session: 'does-not-have-to',
+    //
+    // THE EDITORIAL HALF IS THE ONE SENTENCE THAT ONLY EXISTS IF THE PRERENDER RAN.
+    //
+    // `journal-web` has no API and no CMS: every route is written to static HTML at build time by
+    // `scripts/prerender.ts`, and the served file is what a crawler and a reader both get. So the
+    // hero line below is not proof that a bundle loaded — it is proof that the BUILD STEP after
+    // the bundle ran and its output was copied into the image. A container serving the bare
+    // `index.html` shell would still hydrate in a browser and would still look right here, which
+    // is exactly the failure a `renders` on a client-rendered surface cannot see.
+    //
+    // The structural half is the publication name out of the shell (`lib/meta.ts`'s
+    // `PUBLICATION`), pinned second and deliberately weak, to catch the gateway serving one
+    // bundle from another hostname — what `renders` was built for.
+    renders: [/Crypto, written down plainly/i, /Forge Journal/i],
+    // TESSERA'S FAILURE, DECLARED BEFORE IT HAPPENS. Every article carries a hero and a card, and
+    // an archive whose pictures 404 renders as a page of headlines with grey rectangles — which is
+    // precisely what `micro-tessera-web` shipped while every check stayed green. Two entries, from
+    // two DIFFERENT article directories, because one proves the copy happened and two prove it
+    // was whole: a `.dockerignore` that takes some subdirectories and not others is the shape this
+    // actually fails in.
+    imagery: [
+      {
+        path: '/articles/crypto-without-the-crypto-words/hero.png',
+        why:
+          'the lead article on the home page, and the largest single image the archive serves. A ' +
+          'hole here is the first thing a first-time reader sees.',
+      },
+      {
+        path: '/articles/the-healthy-way-to-hold-crypto/card.png',
+        why:
+          'a card rather than a hero, and from another directory: the grid loads these five ' +
+          'before it loads anything else, and they come from a different COPY than the heroes.',
+      },
+    ],
+  },
+  {
     key: 'admin',
     subdomain: 'admin',
     path: '/',
