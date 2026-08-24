@@ -337,7 +337,11 @@ export function registerHandlers(runner: JobRunner, deps: JobDeps): JobRunner {
       deps.logger.info('incident closed', { probe: probe.name })
     }
 
-    deps.metrics.increment('beacon_checks_total', { target: probe.target, state: result.state })
+    deps.metrics.increment('beacon_checks_total', {
+      network: probe.network,
+      target: probe.target,
+      state: result.state,
+    })
   })
 
   /* ---------------------------------------------------------------- journey.run */

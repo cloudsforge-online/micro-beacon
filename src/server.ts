@@ -239,9 +239,13 @@ export function registerServiceMetrics(metrics: Metrics): Metrics {
       })
       .register({
         name: 'beacon_checks_total',
-        help: 'Probe results recorded, by target and state.',
+        help: 'Probe results recorded, by network, target and state.',
         kind: 'counter',
-        labels: ['target', 'state'],
+        // `network` FIRST among the labels an alert groups by. One beacon now watches both
+        // estates, and without it a testnet outage and a mainnet one are the same series — which
+        // on this service is the sharpest form of micro-org#398, because this is what the public
+        // status page and the release gate read.
+        labels: ['network', 'target', 'state'],
       })
       .register({
         name: 'beacon_journey_runs_total',
@@ -586,8 +590,18 @@ function buildRoutes(): Route[] {
     define('PUT', '/v1/probes/:name', async (ctx, deps) => {
       await authorise(ctx, deps, WRITE_SCOPE, { adminOnly: true })
       const body = await readJson(ctx.req)
+      const name = ctx.params['name'] ?? ''
       const probe = await upsertProbe(deps.sql, {
-        name: ctx.params['name'] ?? '',
+        name,
+        // DERIVED FROM THE NAME rather than taken from the body, and that is deliberate.
+        //
+        // The database CHECK requires a testnet probe's name to end `-testnet`, because
+        // `probe_state` keys on the name and hysteresis counted across two estates reports a state
+        // neither is in. Reading the estate from the body as well would let the two disagree — a
+        // caller could PUT `ledger-testnet` with `network: mainnet` and get a constraint violation
+        // presented as a 500 instead of the naming mistake it is. One source, and the suffix is a
+        // convention an operator can see in the URL they are typing.
+        network: name.endsWith('-testnet') ? ('testnet' as const) : ('mainnet' as const),
         target: requireString(body, 'target'),
         productGroup: requireString(body, 'productGroup'),
         url: requireString(body, 'url'),

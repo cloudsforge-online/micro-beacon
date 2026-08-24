@@ -26,7 +26,8 @@ const THRESHOLDS = { failThreshold: 3, recoverThreshold: 2 }
 function probeFor(url: string, overrides: Partial<Probe> = {}): Probe {
   return {
     id: 'p1',
-    name: 'ledger.livez',
+    network: 'mainnet' as const,
+  name: 'ledger.livez',
     target: 'ledger',
     productGroup: 'Wallet',
     url,

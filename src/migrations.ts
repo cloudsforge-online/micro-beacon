@@ -414,6 +414,43 @@ export const MIGRATIONS: readonly Migration[] = [
       create index if not exists gate_overrides_release_idx on gate_overrides (release_tag);
     `,
   },
+  {
+    version: 8,
+    name: 'probe-network',
+    up: `
+      -- WHICH ESTATE A PROBE WATCHES — the network consolidation (micro-deploy
+      -- \`docs/network-consolidation.md\`).
+      --
+      -- ONE database rather than two, which departs from the plan's class-C listing and is argued
+      -- in §5.3 there. The short version: beacon's rows are OBSERVATIONS, not an estate's user
+      -- data. There is no isolation requirement here, only an attribution one — and the public
+      -- status page wants both estates in one query, which two pools would make a join across
+      -- databases that postgres cannot do.
+      --
+      -- DEFAULT 'mainnet' and NOT NULL, and unlike notify's delivery column this back-fill is
+      -- honest: every row in a mainnet beacon's database was written by a mainnet prober watching
+      -- mainnet URLs. The estate is not being inferred — it is a property of which database this
+      -- migration runs against, and the testnet deployment's rows default the same way in its own
+      -- database before the two are ever merged.
+      alter table probes add column if not exists network text not null default 'mainnet';
+      alter table probes drop constraint if exists probes_network_check;
+      alter table probes
+        add constraint probes_network_check check (network in ('mainnet', 'testnet'));
+
+      -- \`name\` stays globally unique: a consolidated beacon watching both estates needs two rows
+      -- for the ledger and they must be distinguishable by name, because \`probe_state\` keys on it
+      -- and hysteresis counted across two estates would report a state neither is in. The
+      -- convention is a suffix — 'ledger' and 'ledger-testnet' — and the CHECK below makes a row
+      -- that claims testnet while carrying a mainnet-shaped name fail at insert rather than
+      -- quietly page the wrong on-call.
+      alter table probes drop constraint if exists probes_testnet_name_suffixed;
+      alter table probes
+        add constraint probes_testnet_name_suffixed
+        check (network <> 'testnet' or name like '%-testnet');
+
+      create index if not exists probes_network_idx on probes (network) where enabled = true;
+    `,
+  },
 ]
 
 /**
