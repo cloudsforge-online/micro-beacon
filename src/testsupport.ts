@@ -66,6 +66,7 @@ export const db = (sql: postgres.Sql): Sql => sql as unknown as Sql
 /* ------------------------------------------------------------------ fixtures */
 
 export const PROBE_DEFAULTS: Omit<ProbeSpec, 'name' | 'url'> = {
+  network: 'mainnet',
   target: 'ledger',
   productGroup: 'Wallet',
   method: 'GET',

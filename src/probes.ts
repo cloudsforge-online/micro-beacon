@@ -31,6 +31,17 @@ export type ReportedState = ProbeState | 'pending'
 export interface Probe {
   readonly id: string
   readonly name: string
+  /**
+   * The estate this probe watches.
+   *
+   * One beacon covers both since the network consolidation (micro-deploy
+   * `docs/network-consolidation.md`), so "which estate is this result about" stopped being a
+   * property of which pod wrote it. It is a metric LABEL as well as a column: without it the two
+   * estates' availability collapses into one series and a testnet outage reads as half a mainnet
+   * one — micro-org#398 in the shape that matters most, because this is the service the status
+   * page and the release gate read.
+   */
+  readonly network: 'mainnet' | 'testnet'
   readonly target: string
   readonly productGroup: string
   readonly url: string
@@ -139,6 +150,7 @@ export async function execute(probe: Probe, deps: ExecuteDeps = {}): Promise<Che
 interface ProbeRow {
   id: string
   name: string
+  network: 'mainnet' | 'testnet'
   target: string
   product_group: string
   url: string
@@ -154,6 +166,7 @@ function toProbe(row: ProbeRow): Probe {
   return {
     id: row.id,
     name: row.name,
+    network: row.network,
     target: row.target,
     productGroup: row.product_group,
     url: row.url,
@@ -171,13 +184,14 @@ export type ProbeSpec = Omit<Probe, 'id'>
 export async function upsertProbe(sql: Sql, spec: ProbeSpec): Promise<Probe> {
   const rows = (await sql`
     insert into probes
-      (name, target, product_group, url, method, expect_status, interval_ms, deadline_ms,
+      (name, network, target, product_group, url, method, expect_status, interval_ms, deadline_ms,
        critical, enabled)
     values
-      (${spec.name}, ${spec.target}, ${spec.productGroup}, ${spec.url}, ${spec.method},
-       ${spec.expectStatus}, ${spec.intervalMs}, ${spec.deadlineMs}, ${spec.critical},
-       ${spec.enabled})
+      (${spec.name}, ${spec.network}, ${spec.target}, ${spec.productGroup}, ${spec.url},
+       ${spec.method}, ${spec.expectStatus}, ${spec.intervalMs}, ${spec.deadlineMs},
+       ${spec.critical}, ${spec.enabled})
     on conflict (name) do update set
+      network = excluded.network,
       target = excluded.target, product_group = excluded.product_group, url = excluded.url,
       method = excluded.method, expect_status = excluded.expect_status,
       interval_ms = excluded.interval_ms, deadline_ms = excluded.deadline_ms,
